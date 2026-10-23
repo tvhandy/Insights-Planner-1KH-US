@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.23';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.10.23.2';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -1486,7 +1486,9 @@ function trimActivity_() {
 }
 
 // Work back schedule parser (same rules as the dashboard)
-const WBS_HEAD_ = /^\s*(?:wbs|work\s*back(?:\s*schedule)?|workback(?:\s*schedule)?|timeline|schedule)\s*:?\s*$/i;
+// A heading is any short line that mentions WBS, work back, timeline or schedule
+// ("Tentative WBS:", "Here's the WBS we discussed", "Revised timeline (pending sign-off):")
+const WBS_HEAD_ = /\b(?:wbs|work\s*-?\s*backs?|workbacks?|timelines?|schedules?)\b/i;
 const MONTHS_ = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
 const DAYW_ = '(?:mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun)[a-z]*\\.?,?\\s*';
 const RX_NAMED_ = new RegExp('(?:' + DAYW_ + ')?([a-z]{3,9})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*(?:-|–|—|to|through|thru)\\s*(?:' + DAYW_ + ')?(?:([a-z]{3,9})\\.?\\s+)?(\\d{1,2})(?:st|nd|rd|th)?)?', 'i');
@@ -1520,14 +1522,10 @@ function parseWhen_(text, anchor) {
   }
   return null;
 }
-function parseWbs_(brief, anchor) {
-  if (!brief) return null;
-  const lines = String(brief).split(/\n/);
-  const at = lines.findIndex(l => WBS_HEAD_.test(l.replace(/^[\s•*\-–]+/, '')));
-  if (at === -1) return null;
+function wbsSteps_(lines, from, anchor) {
   const steps = [];
   let misses = 0;
-  for (let k = at + 1; k < lines.length && steps.length < 20; k++) {
+  for (let k = from; k < lines.length && steps.length < 20; k++) {
     const raw = lines[k].replace(/^[\s•*\-–·]+/, '').trim();
     if (!raw) continue;
     const c = raw.indexOf(':');
@@ -1539,7 +1537,23 @@ function parseWbs_(brief, anchor) {
     const kind = WORK_RX_.test(label) ? 'work' : MS_RX_.test(label) ? 'milestone' : span > 0 ? 'work' : 'milestone';
     steps.push({ label, s: when.s, e: when.e, kind, note: (raw.slice(c + 1).match(/\(([^)]*)\)/) || [])[1] || '' });
   }
-  return steps.length >= 2 ? steps.sort((a, b) => a.s - b.s) : null;
+  return steps;
+}
+function parseWbs_(brief, anchor) {
+  if (!brief) return null;
+  const lines = String(brief).split(/\n/);
+  // 1) Steps under a heading line that mentions WBS / work back / timeline / schedule
+  for (let at = 0; at < lines.length; at++) {
+    const l = lines[at].replace(/^[\s•*\-–·]+/, '').trim();
+    if (!l || l.length > 160 || !WBS_HEAD_.test(l)) continue;
+    const c = l.indexOf(':');
+    if (c > 0 && parseWhen_(l.slice(c + 1), anchor)) continue; // "Timeline: Oct 28" is a step, not a heading
+    const steps = wbsSteps_(lines, at + 1, anchor);
+    if (steps.length >= 2) return steps.sort((a, b) => a.s - b.s);
+  }
+  // 2) No heading: three or more "Phase: date" lines in a row still count
+  const steps = wbsSteps_(lines, 0, anchor);
+  return steps.length >= 3 ? steps.sort((a, b) => a.s - b.s) : null;
 }
 
 const TIMELINE_WORDS_ = /\b(push(?:ed|ing)?|mov(?:e|ed|ing)\s+(?:to|up|back|out)|shift(?:ed|ing)?|delay(?:ed|s)?|extend(?:ed)?|reschedul\w*|postpon\w*|bump(?:ed)?|new\s+(?:due\s+)?date|due\s+date|deadline|timeline|timing)\b/i;

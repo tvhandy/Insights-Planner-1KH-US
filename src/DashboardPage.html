@@ -314,7 +314,9 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 
 /* ===== Work back schedule (WBS) from the to-do brief ===== */
 // Reads lines like "• Report Development: Oct 19-23" under a "WBS:" heading
-const WBS_HEAD = /^\s*(?:wbs|work\s*back(?:\s*schedule)?|workback(?:\s*schedule)?|timeline|schedule)\s*:?\s*$/i;
+// A heading is any short line that mentions WBS, work back, timeline or schedule
+// ("Tentative WBS:", "Here's the WBS we discussed", "Revised timeline (pending sign-off):")
+const WBS_HEAD = /\b(?:wbs|work\s*-?\s*backs?|workbacks?|timelines?|schedules?)\b/i;
 const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
 const DAYW = '(?:mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun)[a-z]*\\.?,?\\s*';
 const RX_NAMED = new RegExp('(?:' + DAYW + ')?([a-z]{3,9})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*(?:-|–|—|to|through|thru)\\s*(?:' + DAYW + ')?(?:([a-z]{3,9})\\.?\\s+)?(\\d{1,2})(?:st|nd|rd|th)?)?', 'i');
@@ -348,14 +350,10 @@ function parseWhen(text, anchor) {
   }
   return null;
 }
-function parseWBS(brief, anchor) {
-  if (!brief) return null;
-  const lines = String(brief).split(/\n/);
-  const at = lines.findIndex(l => WBS_HEAD.test(l.replace(/^[\s•*\-–]+/, '')));
-  if (at === -1) return null;
+function wbsSteps(lines, from, anchor) {
   const steps = [];
   let misses = 0;
-  for (let k = at + 1; k < lines.length && steps.length < 20; k++) {
+  for (let k = from; k < lines.length && steps.length < 20; k++) {
     const raw = lines[k].replace(/^[\s•*\-–·]+/, '').trim();
     if (!raw) continue;
     const c = raw.indexOf(':');
@@ -367,7 +365,23 @@ function parseWBS(brief, anchor) {
     const kind = WORK_RX.test(label) ? 'work' : MS_RX.test(label) ? 'milestone' : span > 0 ? 'work' : 'milestone';
     steps.push({ label, s: when.s, e: when.e, kind, note: (raw.slice(c + 1).match(/\(([^)]*)\)/) || [])[1] || '' });
   }
-  return steps.length >= 2 ? steps.sort((a, b) => a.s - b.s) : null;
+  return steps;
+}
+function parseWBS(brief, anchor) {
+  if (!brief) return null;
+  const lines = String(brief).split(/\n/);
+  // 1) Steps under a heading line that mentions WBS / work back / timeline / schedule
+  for (let at = 0; at < lines.length; at++) {
+    const l = lines[at].replace(/^[\s•*\-–·]+/, '').trim();
+    if (!l || l.length > 160 || !WBS_HEAD.test(l)) continue;
+    const c = l.indexOf(':');
+    if (c > 0 && parseWhen(l.slice(c + 1), anchor)) continue; // "Timeline: Oct 28" is a step, not a heading
+    const steps = wbsSteps(lines, at + 1, anchor);
+    if (steps.length >= 2) return steps.sort((a, b) => a.s - b.s);
+  }
+  // 2) No heading: three or more "Phase: date" lines in a row still count
+  const steps = wbsSteps(lines, 0, anchor);
+  return steps.length >= 3 ? steps.sort((a, b) => a.s - b.s) : null;
 }
 // Days of an item's effort that fall between s and e (before splitting across the team)
 function itemLoad(i, s, e, past) {
@@ -943,7 +957,7 @@ const FAQ = [
   ['How the numbers work', [
     ['Where do estimates come from?', 'Each deliverable Type has a day range on the Lists tab. Scale picks the low end (S), middle (M or blank) or high end (L). Override days on the Planner row beats both. Anything with no Type and no Override days counts as 0 days, so capacity reads low.'],
     ['How are days split between people?', 'Hands-on people share 75% of a deliverable\'s days; whoever is in Oversight (the Insights Director) gets 25%. Someone alone gets 100%. A custom split on the card overrides it.'],
-    ['How is effort spread over time?', 'Evenly over working days from start to due date. If the to-do or a reply has a <code>WBS:</code> section, effort lands only on its work phases.'],
+    ['How is effort spread over time?', 'Evenly over working days from start to due date. If the to-do or a reply has a WBS (a line mentioning WBS, work back, timeline or schedule, followed by lines like <code>Report development: Oct 29 - Nov 5</code>), effort lands only on its work phases. The heading can say anything around it, like "Tentative WBS:".'],
     ['What happens when work goes into review?', 'In Internal review, Client review or Revisions, only a revision allowance stays booked: 10% of the estimate, at least 0.1 and at most 0.5 day, spread to the due date. Blocked and On hold book nothing. If the work back schedule has passed its Internal review date, it counts as in review even if the stage wasn\'t changed.'],
     ['How is available time worked out?', 'Working days × billable %, minus time off (half days count 0.5), company holidays and Summer Friday afternoons (Friday before Memorial Day to the Friday before Labor Day). Leave cover moves the absent person\'s share to whoever covers.'],
     ['What do the capacity colors mean?', 'Green: under 70% booked, has room. Amber: 70–100%, near full. Red: over 100%. Grey or "out": no available time that week. It\'s an estimate, not a timesheet.'],
