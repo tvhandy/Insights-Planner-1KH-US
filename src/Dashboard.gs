@@ -10,8 +10,8 @@
  */
 
 const DASH_TITLE = 'Insights Planner | 1KH US [Beta]';          // the browser tab's name
-// The browser tab's icon: a public .png or .ico link. This is the 1000heads site icon; swap in another if you prefer.
-const DASH_FAVICON = 'https://1000heads.com/wp-content/uploads/2022/12/1000heads_logo_purple-1.png';
+// The browser tab's icon: a public .png or .ico link (the planner icon, hosted in the GitHub repo's assets folder)
+const DASH_FAVICON = 'https://raw.githubusercontent.com/tvhandy/Insights-Planner-1KH-US/main/assets/planner-icon-dark.png';
 const PLANNER_SHEET_ID = '1as50OMGMFfcaBEgopWL9aaRfAxHLuH8_oBBiVuLWgIg';
 
 // Works from the Sheet's menu and from the web app
