@@ -1030,7 +1030,8 @@ function render() {
   const d = S.data, T = d.TODAY;
   const H = horizons(T), hz = H[S.horizon];
   const triage = d.items.filter(i => i.stage === 'Needs triage');
-  const openItems = d.items.filter(i => i.stage !== 'Delivered' && i.stage !== 'On hold');
+  // Same rule as the Board: not Delivered, On hold, Needs triage or Dismissed
+  const openItems = d.items.filter(i => i.open);
   const wkS = monday(T), wkE = add(wkS, 6), nwE = add(wkS, 13);
   const overdue = d.items.filter(i => i.open && i.e && i.e < T);
   const tentCount = d.items.filter(i => i.tent && i.stage !== 'Delivered').length;
@@ -1077,7 +1078,7 @@ function overview(d, T, H, hz, x) {
   const free = d.people.reduce((t, p) => { const f = availFor(p, hz.s, hz.e) - loadFor(p.name, hz.s, hz.e); return t + (f > 0 ? f : 0); }, 0);
   const unstaffed = d.items.filter(i => i.open && !i.team.length && i.e && i.e >= hz.s && i.s <= hz.e).reduce((t, i) => t + itemLoad(i, hz.s, hz.e), 0);
   const k = [
-    ['Open', x.openItems.length - x.triage.length, 'Excluding Needs triage', 'var(--navy)'],
+    ['Open', x.openItems.length, 'Excluding triage, on hold and dismissed', 'var(--navy)'],
     ['Due this week', dueWeek, fmt(x.wkS) + ' to ' + fmt(x.wkE), '#92400E'],
     ['Due next week', dueNext, fmt(add(x.wkS, 7)) + ' to ' + fmt(x.nwE), '#1E40AF'],
     ['Past due', x.overdue.length, 'Not yet delivered', '#B91C1C'],
