@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.23.2';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.10.26';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -1198,11 +1198,9 @@ function digestData_() {
   const pct = (nm, a, b) => { const av = m.avail(nm, a, b); return av ? Math.round(m.booked(nm, a, b) / av * 100) : null; };
   const cap = people.filter(p => !(P(p.start) && P(p.start) > nfri)).map(p => ({ name: p.name, now: P(p.start) && P(p.start) > fri ? 'new' : pct(p.name, mon, fri), next: pct(p.name, nmon, nfri) }));
 
-  // Delivered last week: an EXT file posted, or moved to Delivered, in the 7 days before this Monday
+  // Delivered last week (see deliveredIn_ for how catch-up updates are left out)
   const wkAgo = add(mon, -7);
-  const delivered = d.items.filter(i => i.stage !== 'Dismissed' && (
-    (i.replies || []).some(x => x.at && x.ext && x.ext.length && new Date(x.at) >= wkAgo && new Date(x.at) < mon) ||
-    (i.stage === 'Delivered' && P(i.stageSince) && P(i.stageSince) >= wkAgo && P(i.stageSince) < mon)));
+  const delivered = deliveredIn_(d, P, wkAgo, mon);
 
   // Long leave with named cover, happening now: "who to ask"
   const away = m.covers.filter(c => c.s <= sun && c.e >= T && m.wd(c.s, c.e) >= 5).map(c => ({ from: c.from, to: c.to, until: c.e, back: nextWd(c.e) }));
@@ -1246,6 +1244,42 @@ function sendDigest_(to, preview) {
 }
 
 // Basecamp rich text allows only simple tags (div, strong, em, a, ul, li, br, h1, blockquote), so no tables or styles
+// When a deliverable actually went out, as best the planner can tell:
+// - a Basecamp reply with an EXT file: the reply's date
+// - moved to Delivered: the earlier of the due date and the day it was marked.
+//   A row due Oct 1 but marked Delivered on Oct 22 (catch-up) counts as Oct 1, so it doesn't show up as "last week".
+function deliveredOn_(i, P) {
+  if (i.stage === 'Dismissed') return null;
+  const ext = (i.replies || []).filter(x => x.at && x.ext && x.ext.length).map(x => new Date(x.at));
+  if (ext.length) return new Date(Math.max.apply(null, ext));
+  if (i.stage !== 'Delivered' || !P(i.stageSince)) return null;
+  const marked = P(i.stageSince), due = i.due ? P(i.due) : null;
+  return due && due < marked ? due : marked;
+}
+function deliveredIn_(d, P, a, b) {
+  return d.items.filter(i => { const t = deliveredOn_(i, P); return t && t >= a && t < b; });
+}
+
+// "8 deliverables across 4 clients went out: Google (4, including 2 monthly reports and 1 quarterly report), Valvoline (2 monthly reports) and Ancestry (1)"
+function deliveredSummary_(items) {
+  const list = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  const plural = (n, w) => n === 1 ? w : /y$/i.test(w) && !/[aeiou]y$/i.test(w) ? w.slice(0, -1) + 'ies' : w + 's';
+  const typeName = t => t.charAt(0).toLowerCase() + t.slice(1);
+  const groups = {};
+  items.forEach(i => { const c = i.account || 'Other'; (groups[c] = groups[c] || []).push(i); });
+  const clients = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b));
+  const part = c => {
+    const g = groups[c], types = {};
+    let untyped = 0;
+    g.forEach(i => { const t = String(i.type || '').trim(); if (!t || t === 'Other') untyped++; else types[t] = (types[t] || 0) + 1; });
+    const named = Object.keys(types).sort((a, b) => types[b] - types[a]).map(t => (types[t] === 1 ? (/^[aeiou]/i.test(t) ? 'an' : 'a') : types[t]) + ' ' + plural(types[t], typeName(t)));
+    if (!named.length) return c + ' (' + g.length + ')';
+    return c + ' (' + (untyped ? g.length + ', including ' : '') + list(named) + ')';
+  };
+  const n = items.length;
+  return n + ' deliverable' + (n === 1 ? '' : 's') + (clients.length > 1 ? ' across ' + clients.length + ' clients' : '') + ' went out: ' + list(clients.map(part));
+}
+
 function digestBasecampHtml_(g, preview, tags) {
   const link = i => i.link ? '<a href="' + esc_(i.link) + '">' + esc_(i.title) + '</a>' : esc_(i.title);
   // tags: team name -> Basecamp person sgid. Tagged people get a Basecamp mention; anyone else shows as plain text.
@@ -1279,8 +1313,10 @@ function digestBasecampHtml_(g, preview, tags) {
     head('🗓️', 'Who\'s in and out') +
     (calBlocks.length ? calBlocks.map(b => '<div><em>' + b[0] + '</em></div>' + ul(b[1])).join('') : none('Everyone\'s in this week, and nothing coming up.')) +
 
-    (g.delivered.length ? head('🎉', 'Delivered last week (' + g.delivered.length + ')') +
-      byClient(g.delivered, i => i, i => link(i) + ' · ' + who(i)) + '<div>Nice work, everyone.</div>' : '') +
+    (g.delivered.length ? head('🎉', 'Delivered last week') +
+      '<div>' + esc_(deliveredSummary_(g.delivered)) + '. Thanks to ' +
+      g.delivered.reduce((a, i) => a.concat(g.teamOf(i)), []).filter((n, k, all) => all.indexOf(n) === k).map(tag).join(', ') +
+      ' for getting them out the door.</div>' : '') +
 
     head('📌', 'Due this week (' + g.due.length + ')') +
     (g.due.length ? byClient(g.due, i => i, i => link(i) + ' · due ' + g.f(g.P(i.due)) + ' · ' + who(i) + ' · <em>' + esc_(i.stage) + '</em>') : none('Nothing due this week.')) +
@@ -1294,7 +1330,7 @@ function digestBasecampHtml_(g, preview, tags) {
     head('✅', 'Reminders') +
     ul(['Complete your timesheet for last week if you haven\'t yet.',
         g.delivered.length
-          ? 'The ' + g.delivered.length + ' deliverable' + (g.delivered.length === 1 ? ' above was' : 's above were') + ' added to the <a href="' + TRACKER_URL + '">Centralized Insights Deliverables Tracker</a> automatically. Add the report and dataset links, and log anything delivered outside Basecamp.'
+          ? 'Last week\'s deliveries were added to the <a href="' + TRACKER_URL + '">Centralized Insights Deliverables Tracker</a> automatically. Add the report and dataset links, and log anything delivered outside Basecamp.'
           : 'Log every delivered project in the <a href="' + TRACKER_URL + '">Centralized Insights Deliverables Tracker</a>.']) +
 
     head('📊', 'Team capacity') +
@@ -1435,16 +1471,13 @@ function fridayWrapText_() {
   const fs = x => Utilities.formatDate(x, tz, 'MMM d');
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const list = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
-  const delivered = d.items.filter(i => i.stage !== 'Dismissed' && (
-    (i.replies || []).some(x => x.at && x.ext && x.ext.length && new Date(x.at) >= mon && new Date(x.at) < sat) ||
-    (i.stage === 'Delivered' && P(i.stageSince) && P(i.stageSince) >= mon && P(i.stageSince) < sat)));
-  const names = delivered.map(i => i.title.replace(/\s*\(projected\)\s*$/, ''));
+  const delivered = deliveredIn_(d, P, mon, sat);
   const dueNext = d.items.filter(i => i.booking !== 'Tentative' && ['Delivered', 'Dismissed'].indexOf(i.stage) === -1 && i.due && P(i.due) >= nmon && P(i.due) <= nsun);
   const outNext = d.timeOff.filter(o => P(o.end) >= nmon && P(o.start) <= add(nmon, 4)).map(o => o.name);
   const hol = d.holidays.filter(h => P(h.date) >= nmon && P(h.date) <= nsun).map(h => h.name + ' ' + DOW[P(h.date).getDay()]);
   const parts = [];
   parts.push(delivered.length
-    ? '🎉 Week wrapped! ' + delivered.length + ' delivered this week: ' + (names.length <= 4 ? list(names) : names.slice(0, 4).join(', ') + ' and ' + (names.length - 4) + ' more') + '. Nice work, team.'
+    ? '🎉 Week wrapped! ' + deliveredSummary_(delivered).replace(/went out$/, 'went out this week') + '. Nice work, team.'
     : '🎉 Week wrapped! Thanks for all the work this week, team.');
   parts.push('Before you log off: please complete your timesheet, and add report links to this week\'s rows in the Centralized Insights Deliverables Tracker (' + TRACKER_URL + '). Deliveries from Basecamp are logged there automatically.');
   const next = [dueNext.length ? dueNext.length + ' due' : 'nothing due'].concat(hol).concat(outNext.length ? [list(outNext.filter((n, k) => outNext.indexOf(n) === k)) + ' out'] : []);
