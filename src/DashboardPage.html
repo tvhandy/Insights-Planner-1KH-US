@@ -62,7 +62,16 @@
   .meter i { display: block; height: 100%; border-radius: 4px; }
   .track { position: relative; }
   .tint { position: absolute; top: 0; bottom: 0; border-left: 1px solid #F1F3F6; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; font-size: 10px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; }
-  .bar { position: absolute; z-index: 2; height: 38px; display: flex; align-items: center; gap: 7px; padding: 0 7px; font-size: 12px; font-weight: 700; overflow: hidden; border-radius: 8px; cursor: pointer; border: 0; text-align: left; font-family: inherit; }
+  .bar { position: absolute; z-index: 2; height: 34px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 22px 0 10px; font-size: 12px; font-weight: 700; overflow: hidden; border-radius: 8px; cursor: pointer; text-align: left; font-family: inherit; white-space: nowrap; }
+  .bar.ovb { height: 20px; font-size: 11px; font-weight: 600; padding: 0 8px; }
+  .bar.ovb .t { font-weight: 600; } .bar.ovb .m { font-size: 10px; }
+  .bar .t { flex: none; max-width: 60%; }
+  .bar .m { flex: 1; min-width: 0; }
+  .dm { position: absolute; top: 3px; width: 7px; height: 7px; transform: translateX(-50%) rotate(45deg); z-index: 1; }
+  .lk { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); display: inline-flex; z-index: 1; }
+  .lstrip { display: grid; gap: 4px; padding: 6px 4px 0; }
+  .lc { height: 20px; border-radius: 5px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; }
+  .tint.off { color: #5F6775; align-items: flex-start; padding-top: 4px; }
   .bar .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
   .bar .m { font-size: 10px; font-weight: 500; opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
   .prio { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; border-radius: 5px; }
@@ -101,7 +110,7 @@
   /* Work back schedule (WBS) */
   .wseg { position: absolute; top: 0; bottom: 0; z-index: 0; }
   .ms { position: absolute; bottom: 3px; width: 9px; height: 9px; transform: translateX(-50%) rotate(45deg); border: 1.5px solid #fff; z-index: 1; }
-  .bar > :not(.wseg):not(.ms) { position: relative; z-index: 1; }
+  .bar > :not(.wseg):not(.ms):not(.dm):not(.lk) { position: relative; z-index: 1; }
   .wbs { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .wbs .st { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; padding: 9px 12px; border-top: 1px solid var(--line2); font-size: 13px; }
   .wbs .st:first-child { border-top: 0; }
@@ -113,7 +122,6 @@
   .split { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
   .sp { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
   .sp.on { border-color: #D8C2FA; background: #FBF8FF; }
-  .tint .lp { position: absolute; bottom: 2px; right: 6px; font-size: 10px; font-weight: 700; color: #5F6775; }
   .sp input { width: 72px; min-height: 36px; padding: 0 8px; border: 1px solid #CBD5E1; border-radius: 8px; font: inherit; font-size: 14px; text-align: right; }
   /* Basecamp replies */
   .replies { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
@@ -297,7 +305,7 @@ const EXTRA_COLORS = [['#7C5E10', '#F3EAD0'], ['#3F6212', '#E5EED6'], ['#1E40AF'
 const OPEN_EXCLUDE = ['Delivered', 'On hold', 'Needs triage', 'Dismissed'];
 
 /* ===== State ===== */
-const S = { welcome: (() => { try { return localStorage.getItem('kh_welcome') !== '1'; } catch (e) { return false; } })(), feedback: null, faqQ: '', timeoff: null, boardGroup: 'none', bTiming: 'all', bSort: 'due', bClient: '', bOlder: false, compact: (() => { try { return !!localStorage.getItem('kh_compact'); } catch (e) { return false; } })(), boardOpen: {}, book: { open: false, f: { likelihood: 'Likely', people: [] } }, planEdit: null, me: (() => { try { return localStorage.getItem('kh_me') || ''; } catch (e) { return ''; } })(), dtab: 'overview', expanded: false, search: '', bulk: false, askActual: null, hireFrom: '', fcWeeks: 13, actFilter: 'all', actSeen: null, syncing: false, awaiting: false, confirm: null, tab: 'overview', horizon: 'week', owner: 'All', showTriage: false, detail: null, adding: false, data: null, dragId: null, overCol: null };
+const S = { welcome: (() => { try { return localStorage.getItem('kh_welcome') !== '1'; } catch (e) { return false; } })(), feedback: null, faqQ: '', timeoff: null, boardGroup: 'none', bTiming: 'all', bSort: 'due', bClient: '', bOlder: false, compact: (() => { try { return !!localStorage.getItem('kh_compact'); } catch (e) { return false; } })(), boardOpen: {}, book: { open: false, f: { likelihood: 'Likely', people: [] } }, planEdit: null, me: (() => { try { return localStorage.getItem('kh_me') || ''; } catch (e) { return ''; } })(), dtab: 'overview', expanded: false, search: '', bulk: false, askActual: null, hireFrom: '', fcWeeks: 13, actFilter: 'all', actSeen: null, syncing: false, awaiting: false, confirm: null, tab: 'overview', horizon: 'month', owner: 'All', showTriage: false, detail: null, adding: false, data: null, dragId: null, overCol: null };
 
 /* ===== Date helpers (calendar-day math, safe across daylight saving) ===== */
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -1198,78 +1206,113 @@ function overview(d, T, H, hz, x) {
   const usedClients = {};
   const todayStyle = T >= hz.s && T <= hz.e ? `left:${pct(bpos(T) + (hz.gran === 'day' ? 0.5 : 0.1))}%` : 'display:none';
   const lanes = (S.owner === 'All' ? [{ name: 'To be staffed', p: null }] : []).concat(people.map(p => ({ name: p.name, p })));
+  const SOLID = ['In progress', 'Internal review', 'Client review', 'Revisions'];
   const laneHtml = lanes.map(({ name, p }) => {
     const owner = p ? p.name : '';
-    const tints = B.map((b, i) => {
+    // Load strip: one cell per column, colored by how booked this person is (gray when out)
+    const strip = B.map(b => {
       const used = loadFor(owner, b.s, b.e), avail = p ? availFor(p, b.s, b.e) : 0;
+      let bg = '#DCFCE7', fg = '#14532D', lab;
+      if (!p) { lab = used > 0.05 ? used.toFixed(1) + ' d' : '—'; bg = used > 0.05 ? '#FFF7ED' : '#F9FAFB'; fg = used > 0.05 ? '#9A3412' : '#6B7280'; }
+      else if (avail === 0) { lab = used > 0.05 ? 'Out · ' + used.toFixed(1) + ' d' : 'Out'; bg = used > 0.05 ? '#FEE2E2' : '#F1F2F5'; fg = used > 0.05 ? '#7F1D1D' : '#5F6775'; }
+      else { const v = Math.round(used / avail * 100); lab = v + '%'; if (v > 100) { bg = '#FEE2E2'; fg = '#7F1D1D'; } else if (v >= 70) { bg = '#FEF3C7'; fg = '#78350F'; } }
+      return `<span class="lc" style="background:${bg};color:${fg}" title="${p ? used.toFixed(1) + ' of ' + avail.toFixed(1) + ' d booked' : used.toFixed(1) + ' d with no owner'}">${lab}</span>`;
+    }).join('');
+    // Time off, holidays and Summer Fridays: hatched, labeled
+    const tints = B.map((b, i) => {
       const hols = []; for (let dd = b.s; dd <= b.e; dd = add(dd, 1)) if (isWeekday(dd) && HOL[key(dd)]) hols.push(HOL[key(dd)]);
       const offs = p ? p.off.filter(o => o.e >= b.s && o.s <= b.e) : [];
-      // A day that's only half off (half-day PTO or a Summer Friday) shades just the afternoon half
       const summer = hz.gran === 'day' && p && isSummerFri(b.s) && !hols.length;
-      // AM half days shade the left half, PM half days and Summer Fridays the right; both together shade the whole day
       const halves = offs.length && offs.every(o => o.half) ? [...new Set(offs.map(o => o.part).concat(summer ? ['PM'] : []))] : summer && !offs.length ? ['PM'] : [];
       const half = hz.gran === 'day' && !hols.length && halves.length === 1 ? halves[0] : '';
       const label = hols.length ? (hz.gran === 'day' ? 'Holiday · ' + hols[0] : hols.length + (hols.length === 1 ? ' holiday' : ' holidays'))
         : offs.length ? offs.map(o => o.type + (o.half && hz.gran === 'day' ? ' · ' + o.part : '')).join(', ') : summer ? 'Summer Friday · PM' : '';
-      const off = hz.gran === 'day' && (hols.length || offs.length || summer);
-      const hatch = 'repeating-linear-gradient(135deg,#EEF0F3 0 8px,#F7F8FA 8px 16px)';
-      const base = !p ? (used > 0 ? '#FFF8EB' : '#FAFAFB') : avail === 0 ? '#EEF0F3' : used > avail + 0.01 ? '#FDECEC' : used >= avail * 0.85 ? '#FEF6E0' : used === 0 ? '#EAF7F0' : '#FFFFFF';
-      const pctLabel = !label && !half && p && avail > 0 && used > 0.05 ? Math.round(used / avail * 100) + '%' : !label && !p && used > 0.05 ? used.toFixed(1) + ' d' : '';
-      const bg = half ? `${hatch} ${half === 'AM' ? 'left' : 'right'} top / 50% 100% no-repeat, ${base}` : off ? hatch : base;
-      return `<span class="tint" style="left:${pct(i)}%;width:${pct(1)}%;background:${bg}" ${half ? `title="${half === 'AM' ? 'Morning' : 'Afternoon'} off"` : pctLabel ? `title="${used.toFixed(1)} of ${avail.toFixed(1)} d booked"` : ''}>${half ? `<span style="width:50%;${half === 'AM' ? 'margin-right:auto' : 'margin-left:auto'};text-align:center;overflow:hidden;text-overflow:ellipsis">${esc(label)}</span>` : pctLabel ? `<span class="lp">${pctLabel}</span>` : esc(label)}</span>`;
+      const off = hols.length || offs.length || summer;
+      const outAll = p && availFor(p, b.s, b.e) === 0 && !hols.length;
+      if (!off && !outAll) return `<span class="tint" style="left:${pct(i)}%;width:${pct(1)}%"></span>`;
+      const hatch = 'repeating-linear-gradient(135deg,#EEF0F3 0 6px,#FFFFFF 6px 12px)';
+      const bg = half ? `${hatch} ${half === 'AM' ? 'left' : 'right'} top / 50% 100% no-repeat` : hatch;
+      const lab = label || (outAll ? (p.lastD && p.lastD < b.s ? 'Left' : 'Out') : '');
+      return `<span class="tint off" style="left:${pct(i)}%;width:${pct(1)}%;background:${bg}">${half ? `<span style="width:50%;${half === 'AM' ? 'margin-right:auto' : 'margin-left:auto'};text-align:center;overflow:hidden;text-overflow:ellipsis">${esc(lab)}</span>` : esc(lab)}</span>`;
     }).join('');
     const PR = { High: 0, Medium: 1, Low: 2 };
     // Each person's bar covers their own window (whole project, development, or review and revisions)
     const mine = S.data.items.filter(i => i.open && (onIt(i, owner) || (owner && coverFor(i, owner, hz.s, hz.e))) && i.s && i.e)
-      .map(i => { const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e]; return { i, s: r[0], e: r[1] }; })
+      .map(i => { const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e]; return { i, s: r[0], e: r[1], ov: !!owner && i.overs.indexOf(owner) !== -1 && i.team.length > 1 }; })
       .filter(x => x.s && x.e && x.e >= hz.s && x.s <= hz.e)
-      .sort((a, b) => (PR[a.i.priority] ?? 1) - (PR[b.i.priority] ?? 1) || a.s - b.s);
+      .sort((a, b) => (a.ov - b.ov) || (PR[a.i.priority] ?? 1) - (PR[b.i.priority] ?? 1) || a.s - b.s);
     const rows = [];
-    const bars = mine.map(({ i, s: bS, e: bE }) => {
-      let r = rows.findIndex(row => row.every(o => o.e < bS || o.s > bE));
-      if (r === -1) { r = rows.length; rows.push([]); }
+    let yTop = 0;
+    const rowH = [];
+    const bars = mine.map(({ i, s: bS, e: bE, ov }) => {
+      let r = rows.findIndex((row, k) => (rowH[k] === (ov ? 26 : 40)) && row.every(o => o.e < bS || o.s > bE));
+      if (r === -1) { r = rows.length; rows.push([]); rowH.push(ov ? 26 : 40); }
       rows[r].push({ s: bS, e: bE });
+      const top = 6 + rowH.slice(0, r).reduce((t, h) => t + h, 0);
       const atDue = +bE === +i.e;
       const [c, tint] = CLIENT[i.client]; usedClients[i.client] = 1;
       const l = bpos(maxD(bS, hz.s)), rr = bpos(add(minD(bE, hz.e), 1)), w = Math.max(rr - l, 0.2);
-      const cutL = bS < hz.s, cutR = bE > hz.e, low = i.priority === 'Low', past = atDue && i.e < T, dueToday = atDue && +i.e === +T;
-      const bg = i.tent ? `repeating-linear-gradient(45deg,${tint} 0 6px,#fff 6px 12px)` : low ? tint : c;
-      const fg = i.tent || low ? c : '#fff';
+      const cutL = bS < hz.s, cutR = bE > hz.e, past = atDue && i.e < T, dueToday = atDue && +i.e === +T;
+      const solid = !i.tent && !ov && SOLID.indexOf(i.stage) !== -1;
+      const look = ov ? 'background:#EEF0F3;color:#374151;border:0'
+        : i.tent ? `background:repeating-linear-gradient(45deg,${tint} 0 6px,#fff 6px 12px);color:${c};border:1.5px dashed ${c}`
+        : solid ? `background:${c};color:#fff;border:0`
+        : `background:${tint};color:${c};border:1.5px solid ${c}`;
       const wide = w / nB >= 0.09 || (nB <= 5 && w >= 0.6);
-      const border = i.tent ? `border:1.5px dashed ${c};` : low ? `border:1px solid ${c}55;` : 'box-shadow:0 1px 3px rgba(17,24,39,.18);';
-      const flag = cutR || !atDue ? '' : `<span class="flag ${past ? 'past' : ''}" ${i.clientDate ? 'title="Client date"' : ''}>${i.clientDate ? I.lock : I.flag}${past ? 'Past due' : dueToday ? 'Due today' : (wide ? (i.clientDate ? 'Client date' : 'Due') : '')}</span>`;
-      // With a WBS: light bar, solid work phases, diamonds for milestones
-      let segs = '', barBg = bg, barFg = fg;
-      if (i.wbs && !i.tent) {
-        barBg = tint; barFg = c;
+      // WBS milestones as diamonds; review and revisions shaded
+      let segs = '';
+      if (i.wbs && !ov) {
         const rel = dt => (bpos(dt) - l) / w * 100;
         segs = i.wbs.map(x => {
-          if (x.e < hz.s || x.s > hz.e) return '';
-          if (x.kind === 'work') { const a = Math.max(0, rel(maxD(x.s, hz.s))), b = Math.min(100, rel(add(minD(x.e, hz.e), 1))); return `<span class="wseg" title="${esc(x.label)}: ${fmt(x.s)}${+x.e !== +x.s ? '–' + fmt(x.e) : ''}" style="left:${a}%;width:${Math.max(0, b - a)}%;background:${c}38"></span>`; }
+          if (x.s < maxD(bS, hz.s) || x.s > minD(bE, hz.e)) return '';
+          if (x.kind === 'work') return '';
           const mid = (bpos(x.s) + bpos(add(x.s, 1))) / 2;
-          return `<span class="ms" title="${esc(x.label)}: ${DOW[x.s.getDay()]}, ${fmt(x.s)}" style="left:${(mid - l) / w * 100}%;background:${c}"></span>`;
+          return `<span class="dm" title="${esc(x.label)}: ${DOW[x.s.getDay()]}, ${fmt(x.s)}" style="left:${(mid - l) / w * 100}%;background:${solid ? '#fff' : c}"></span>`;
         }).join('');
+        if (i.rwS && i.rwS <= bE && i.e >= bS) { const a2 = Math.max(0, rel(maxD(add(i.rwS, 1), maxD(bS, hz.s)))), b2 = Math.min(100, rel(add(minD(i.e, hz.e), 1))); if (b2 > a2) segs = `<span class="wseg" style="left:${a2}%;width:${b2 - a2}%;background:${solid ? 'rgba(255,255,255,.2)' : 'rgba(17,24,39,.06)'}"></span>` + segs; }
       }
       const nowStep = wbsNow(i, T);
-      return `<button class="bar" data-open="${esc(i.id)}" title="${esc(i.title)}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${8 + r * 46}px;left:calc(${pct(l)}% + 4px);width:calc(${pct(w)}% - 8px);min-width:34px;background:${i.wbs && !i.tent ? barBg : bg};color:${i.wbs && !i.tent ? barFg : fg};${border}${past ? 'outline:2px solid var(--red);outline-offset:1px;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
-        ${segs}<span class="prio" role="img" aria-label="${esc(i.priority)} priority" style="${i.tent || low || i.wbs ? `background:#fff;color:${c}` : 'background:rgba(255,255,255,.22);color:#fff'}">${I[i.priority] || I.Medium}</span>
-        ${wide ? `<span style="display:flex;flex-direction:column;min-width:0;overflow:hidden"><span class="t">${cutL ? '← ' : ''}${esc(i.title)}</span><span class="m">${esc(i.client)}${i.sub ? ' · ' + esc(i.sub) : ''} · ${nowStep && i.wbs ? (nowStep.s <= T ? 'Now: ' : 'Next: ') + esc(nowStep.label) + ' · ' : ''}${(() => { const cv = owner && !onIt(i, owner) ? coverFor(i, owner, hz.s, hz.e) : null; if (cv) return 'covering for ' + esc(cv.from) + ' from ' + fmt(cv.s); const tl = i.tlFlag ? '⚠ timeline changed · ' : ''; const away = owner && covers().find(c => c.from === owner && c.e >= i.s && c.s <= i.e); return tl + (i.paused ? esc(i.stage) + ' · nothing booked · ' : i.revAllow !== undefined ? (i.pastIR && i.stage !== 'Internal review' ? 'past internal review' : 'in review') + ' · ' + (i.revAllow * (owner && i.est ? daysFor(i, owner) / i.est : 1)).toFixed(1) + ' d left for revisions · ' : '') + (i.est ? (owner ? daysFor(i, owner) : i.est).toFixed(1) + ' of ' + i.est.toFixed(1) + ' d' : 'No estimate') + (owner && i.team.length > 1 ? ' · ' + (i.roleOf(owner) === 'support' ? 'supporting ' + esc(i.lead) : i.roleOf(owner)) : '') + (owner && onIt(i, owner) && winOf(i, owner) !== 'all' ? ' · ' + WIN_LABEL[winOf(i, owner)] : '') + (i.needsSplit ? ' · split not set' : '') + (away ? ' · ' + esc(away.to) + ' covers from ' + fmt(away.s) : ''); })()}${cutR ? ' · continues →' : ''}</span></span>` : ''}
-        ${flag}</button>`;
+      const cv = owner && !onIt(i, owner) ? coverFor(i, owner, hz.s, hz.e) : null;
+      const days = i.est ? (owner && !cv ? daysFor(i, owner) : i.est) : 0;
+      const meta = [];
+      if (ov) meta.push('oversight · ' + days.toFixed(1) + ' d');
+      else {
+        meta.push(esc(i.client) + (i.sub ? ' · ' + esc(i.sub) : ''));
+        if (cv) meta.push('covering for ' + esc(cv.from));
+        if (i.paused) meta.push(esc(i.stage) + ' · nothing booked');
+        else if (i.revAllow !== undefined) meta.push('in review · ' + (i.revAllow * (owner && i.est ? daysFor(i, owner) / i.est : 1)).toFixed(1) + ' d left');
+        else meta.push(i.est ? (owner && i.team.length > 1 && !cv ? days.toFixed(1) + ' of ' + i.handsEst.toFixed(1) + ' d' : i.handsEst.toFixed(1) + ' d') : 'no estimate');
+        if (owner && onIt(i, owner) && winOf(i, owner) !== 'all') meta.push(WIN_LABEL[winOf(i, owner)]);
+        if (nowStep && i.wbs) meta.push((nowStep.s <= T ? 'Now: ' : 'Next: ') + esc(nowStep.label));
+        if (i.needsSplit) meta.push('split not set');
+        if (i.tlFlag) meta.push('timeline changed');
+        if (atDue) meta.push(past ? 'past due' : dueToday ? 'due today' : 'due ' + DOW[i.e.getDay()] + ' ' + fmt(i.e));
+      }
+      const lock = atDue && !cutR && i.clientDate ? `<span class="lk" title="Client date">${I.lock}</span>` : '';
+      return `<button class="bar${ov ? ' ovb' : ''}" data-open="${esc(i.id)}" title="${esc(i.title)}${ov ? ' (oversight)' : ''}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${top}px;left:calc(${pct(l)}% + 3px);width:calc(${pct(w)}% - 6px);min-width:30px;${look};${past ? 'box-shadow:0 0 0 2px #fff,0 0 0 4px #DC2626;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
+        ${segs}<span class="t"${wide || ov ? '' : ' style="max-width:100%"'}>${cutL ? '← ' : ''}${esc(i.title)}</span>${wide || ov ? `<span class="m">${meta.join(' · ')}${cutR ? ' →' : ''}</span>` : ''}${lock}</button>`;
     }).join('');
+    const trackH = 12 + (rowH.length ? rowH.reduce((t, h) => t + h, 0) : 40);
     const booked = loadFor(owner, hz.s, hz.e), avail = p ? availFor(p, hz.s, hz.e) : 0;
     const alloc = avail ? Math.round(booked / avail * 100) : 0;
-    const status = !p ? booked.toFixed(1) + ' d need an owner' : avail === 0 ? 'Not available' : alloc > 100 ? 'Over capacity' : alloc >= 90 ? 'Fully allocated' : alloc >= 70 ? 'Nearly full' : 'Has capacity';
-    const tone = !p ? '#92400E' : avail === 0 ? 'var(--soft)' : alloc > 100 ? '#B91C1C' : alloc >= 70 ? '#B45309' : '#047857';
-    const meterC = alloc > 100 ? 'var(--red)' : alloc >= 70 ? '#D97706' : '#10B981';
-    const last = p && p.lastD && p.lastD >= hz.s && p.lastD <= hz.e ? ' · last day ' + fmt(p.lastD) : '';
+    const status = !p ? booked.toFixed(1) + ' d need an owner' : avail === 0 ? 'Not available' : alloc + '% booked · ' + (alloc > 100 ? 'over' : alloc >= 85 ? 'full' : alloc >= 70 ? 'near full' : 'has room');
+    const tone = !p ? '#9A3412' : avail === 0 ? 'var(--soft)' : alloc > 100 ? '#B91C1C' : alloc >= 70 ? '#92400E' : '#047857';
+    const role = p ? (p.role || (p.projectRole === 'Oversight' ? 'Oversight' : '')) : 'No owner yet';
+    const last = p && p.lastD && p.lastD >= hz.s && p.lastD <= add(hz.e, 60) ? 'last day ' + fmt(p.lastD) : '';
+    const leave = p ? p.off.find(o => o.cover && o.s <= add(hz.e, 30) && o.e >= hz.s && wd(o.s, o.e) >= 5) : null;
     return `<div class="lane">
       <div class="who">
-        <div class="row" style="gap:10px;flex-wrap:nowrap"><span class="av" style="${p ? '' : 'background:#FEF3C7;color:#92400E'}">${p ? esc(p.initials) : '?'}</span>
-          <span style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:700">${esc(name)}</span><span style="font-size:11px;font-weight:600;color:${tone}">${status}${last}</span></span></div>
-        ${p && avail ? `<div class="row" style="gap:10px;flex-wrap:nowrap"><div class="meter"><i style="width:${Math.min(100, alloc)}%;background:${meterC}"></i></div><span style="flex:none;min-width:48px;text-align:right;font-size:16px;font-weight:800;color:${tone}">${alloc}%</span></div>` : ''}
+        <div class="row" style="gap:10px;flex-wrap:nowrap;align-items:flex-start"><span class="av" style="${p ? '' : 'background:#FFF7ED;color:#9A3412'}">${p ? esc(p.initials) : '?'}</span>
+          <span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font-weight:700">${esc(name)}</span>
+            <span style="font-size:11px;color:var(--soft)">${esc([role, last].filter(String).join(' · '))}</span>
+            ${leave ? `<span style="font-size:11px;color:var(--soft)">Out ${fmt(leave.s)}–${fmt(leave.e)} · ${esc(leave.cover)} covers</span>` : ''}
+            <span style="font-size:11px;font-weight:700;color:${tone}">${status}</span></span></div>
       </div>
-      <div class="track" style="height:${Math.max(66, 16 + Math.max(1, rows.length) * 46)}px">${tints}<span class="today" style="${todayStyle}"></span>${bars}
-        ${mine.length ? '' : '<span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--soft)">No projects in this view</span>'}</div>
+      <div style="display:flex;flex-direction:column;min-width:0">
+        <div class="lstrip" style="grid-template-columns:repeat(${nB},minmax(0,1fr))">${strip}</div>
+        <div class="track" style="height:${trackH}px">${tints}<span class="today" style="${todayStyle}"></span>${bars}
+          ${mine.length ? '' : '<span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--soft)">No projects in this view</span>'}</div>
+      </div>
     </div>`;
   }).join('');
 
@@ -1278,12 +1321,15 @@ function overview(d, T, H, hz, x) {
       <div class="seg" role="group" aria-label="Time span">${Object.keys(H).map(k => `<button class="${S.horizon === k ? 'on' : ''}" data-h="${k}">${H[k].label}</button>`).join('')}</div></div>
     <div class="row between">
       <div class="legend">
+        <span><span class="sw" style="background:#2557D6;width:22px"></span>In progress</span>
+        <span><span class="sw" style="background:#DCE6FB;border:1.5px solid #2557D6;width:22px;box-sizing:border-box"></span>Not started</span>
+        <span><span class="sw" style="background:repeating-linear-gradient(45deg,#DCE6FB 0 3px,#fff 3px 6px);border:1.5px dashed #2557D6;width:22px;box-sizing:border-box"></span>Tentative</span>
+        <span><span class="sw" style="background:#EEF0F3;width:22px;height:8px"></span>Oversight</span>
+        <span><span class="sw" style="background:#374151;width:8px;height:8px;transform:rotate(45deg)"></span>WBS milestone</span>
+        <span>${I.lock} Client date</span>
+        <b>Load</b><span><span class="sw" style="background:#DCFCE7"></span>Room</span><span><span class="sw" style="background:#FEF3C7"></span>Near full</span><span><span class="sw" style="background:#FEE2E2"></span>Over</span>
+        <span><span class="sw" style="background:repeating-linear-gradient(135deg,#DDE1E7 0 3px,#F7F8FA 3px 6px);border:1px solid #D1D5DB"></span>Time off or holiday</span>
         <b>Client</b>${Object.keys(usedClients).map(c => `<span><span class="sw" style="background:${CLIENT[c][0]}"></span>${esc(c)}</span>`).join('')}
-        <b>Priority</b><span>${I.High} High</span><span>${I.Medium} Medium</span><span>${I.Low} Low</span>
-        <span style="color:#B91C1C;font-weight:600">${I.flag} Due</span><span style="color:#B91C1C;font-weight:600">${I.lock} Client date</span><span class="flag past" style="margin:0">${I.flag}Past due</span>
-        <span><span class="sw" style="border:1px dashed #6B7280;background:repeating-linear-gradient(45deg,#E5E7EB 0 3px,#fff 3px 6px);width:22px;height:12px"></span>Tentative</span>
-        <span><span class="sw" style="background:#FDECEC"></span>Over capacity</span>
-        <span><span class="sw" style="background:repeating-linear-gradient(135deg,#DDE1E7 0 3px,#F7F8FA 3px 6px);border:1px solid #D1D5DB"></span>PTO, OOO, sick or holiday</span>
       </div>
       <div class="row">${['All'].concat(d.people.map(p => p.name)).map(o => `<button class="pill ${S.owner === o ? 'on' : ''}" data-owner="${esc(o)}">${esc(o)}</button>`).join('')}</div>
     </div>
