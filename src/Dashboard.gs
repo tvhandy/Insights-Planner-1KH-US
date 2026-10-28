@@ -62,7 +62,7 @@ function getDashboardData(opts) {
   // Planner: A ID … X Brief, Y Booking, Z Team on it, AA Split, AB Basecamp replies (JSON from the sync)
   const pl = ss.getSheetByName('Planner');
   const last = pl.getLastRow();
-  const rows = last < 2 ? [] : pl.getRange(2, 1, Math.max(last - 1, 1), Math.min(pl.getMaxColumns(), 33)).getValues();
+  const rows = last < 2 ? [] : pl.getRange(2, 1, Math.max(last - 1, 1), Math.min(pl.getMaxColumns(), 37)).getValues();
   const items = [];
   rows.forEach((r, i) => {
     if (str(r[3]) === '') return;
@@ -72,11 +72,15 @@ function getDashboardData(opts) {
       owner: str(r[8]), assigned: str(r[9]), stage: str(r[10]) || 'Not started',
       start: iso(r[11]), due: iso(r[12]), workStart: iso(r[13]),
       priority: str(r[16]) || 'Medium', link: str(r[17]), notes: str(r[18]),
-      source: str(r[19]), added: iso(r[20]), brief: str(r[23]), booking: str(r[24]) || 'Confirmed', split: str(r[26]), replies: replies_(r[27]), flag: replyFlag_(r[27]), actual: r[28] === '' || r[28] === null ? null : Number(r[28]), likelihood: str(r[29]), stageSince: iso(r[30]), clientDate: str(r[32]) === 'Yes' || r[32] === true
+      source: str(r[19]), added: iso(r[20]), brief: str(r[23]), booking: str(r[24]) || 'Confirmed', split: str(r[26]), replies: replies_(r[27]), flag: replyFlag_(r[27]), actual: r[28] === '' || r[28] === null ? null : Number(r[28]), likelihood: str(r[29]), stageSince: iso(r[30]), clientDate: str(r[32]) === 'Yes' || r[32] === true,
+      planStart: iso(r[33]), planIR: iso(r[34]), planDue: iso(r[35]), reviewer: str(r[36])
     });
   });
 
   // Team: people, time off log, company holidays
+  // Plan mode saves dates in planner-only columns (AH–AJ). They win over Basecamp's; the Basecamp due date is kept for reference.
+  items.forEach(i => { i.dueBasecamp = i.due; if (i.planDue) i.due = i.planDue; if (i.planStart) i.workStart = i.planStart; i.hasPlan = !!(i.planStart || i.planDue || i.planIR); });
+
   const tm = ss.getSheetByName('Team');
   const team = tm.getRange('A5:P14').getValues().filter(r => str(r[0])).map(r => ({
     name: str(r[0]), role: str(r[1]), bill: Number(r[2]) || 0,
@@ -388,6 +392,96 @@ function setSplit(row, id, text, total) {
   if (text && Number(total) > 0) writeCell_(r.row, id, 7, Math.round(Number(total) * 100) / 100);
   logRow_(r.row, 'split', text ? 'Days per person set: ' + text : 'Back to the default split by role');
   return { row: r.row, id: id, split: String(text || ''), total: Number(total) || 0 };
+}
+
+// ===== Plan mode =====
+// Drafts live on the "Plan drafts" tab: ID, Name, Author, Shared with, Updated, Options (JSON)
+const PLAN_SHEET = 'Plan drafts';
+function planSheet_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(PLAN_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(PLAN_SHEET);
+    sh.getRange(1, 1, 1, 6).setValues([['ID', 'Name', 'Author', 'Shared with', 'Updated', 'Options (JSON, written by the dashboard)']]).setFontWeight('bold');
+    sh.setFrozenRows(1); sh.setColumnWidth(6, 400);
+  }
+  return sh;
+}
+function me_() { const full = displayName_(); return matchTeamName_(full) || full; }
+// Drafts I wrote or that were shared with me, newest first
+function listPlanDrafts() {
+  const sh = planSheet_(), me = me_();
+  const n = sh.getLastRow();
+  if (n < 2) return [];
+  return sh.getRange(2, 1, n - 1, 6).getValues().filter(r => String(r[0]))
+    .map(r => ({ id: String(r[0]), name: String(r[1]), author: String(r[2]), shared: String(r[3]).split(/,\s*/).filter(String), updated: r[4] instanceof Date ? r[4].toISOString() : '', options: (() => { try { return JSON.parse(String(r[5] || '{}')); } catch (e) { return {}; } })() }))
+    .filter(x => x.author === me || x.shared.indexOf(me) !== -1)
+    .sort((a, b) => b.updated.localeCompare(a.updated));
+}
+// Creates or updates a draft: { id?, name, options: { A: changes, B?: changes } }
+function savePlanDraft(dr) {
+  const sh = planSheet_(), me = me_();
+  const json = JSON.stringify(dr.options || {});
+  if (json.length > 45000) throw new Error('This draft is too big to save. Apply or discard some changes first.');
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    const n = sh.getLastRow();
+    const ids = n < 2 ? [] : sh.getRange(2, 1, n - 1, 1).getValues().map(r => String(r[0]));
+    let k = dr.id ? ids.indexOf(String(dr.id)) : -1;
+    const id = k === -1 ? 'PL-' + Utilities.formatDate(new Date(), 'UTC', 'yyMMddHHmmss') : String(dr.id);
+    const row = k === -1 ? n + 1 : k + 2;
+    const prev = k === -1 ? ['', '', me, ''] : sh.getRange(row, 1, 1, 4).getValues()[0];
+    sh.getRange(row, 1, 1, 6).setValues([[id, dr.name || prev[1] || 'Plan', prev[2] || me, prev[3] || '', new Date(), json]]);
+    return { id: id, updated: new Date().toISOString() };
+  } finally { lock.releaseLock(); }
+}
+function sharePlanDraft(id, name) {
+  const sh = planSheet_();
+  const n = sh.getLastRow();
+  const ids = n < 2 ? [] : sh.getRange(2, 1, n - 1, 1).getValues().map(r => String(r[0]));
+  const k = ids.indexOf(String(id)); if (k === -1) throw new Error('Could not find that draft.');
+  const cur = String(sh.getRange(k + 2, 4).getValue()).split(/,\s*/).filter(String);
+  if (cur.indexOf(name) === -1) cur.push(name);
+  sh.getRange(k + 2, 4).setValue(cur.join(', '));
+  logActivity_('plan', '', 'Plan draft', me_(), 'Shared a plan draft with ' + name + '. It\'s on their Plan tab.', '');
+  return cur;
+}
+function deletePlanDraft(id) {
+  const sh = planSheet_();
+  const n = sh.getLastRow();
+  const ids = n < 2 ? [] : sh.getRange(2, 1, n - 1, 1).getValues().map(r => String(r[0]));
+  const k = ids.indexOf(String(id)); if (k !== -1) sh.deleteRow(k + 2);
+  return true;
+}
+// Writes a plan to the Planner only (Basecamp is untouched). changes: [{ row, id, title, fields: { split, est, planStart, planIR, planDue, reviewer, clientDate }, summary }]
+// newItems: Planning bookings (same shape as bookWork) for pipeline work pencilled in from the plan
+function applyPlan(changes, newItems, draftId) {
+  const P = s => { const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2], 12); };
+  const COLS = { split: 27, est: 7, clientDate: 33, planStart: 34, planIR: 35, planDue: 36, reviewer: 37 };
+  let n = 0;
+  (changes || []).forEach(c => {
+    let r = { row: c.row };
+    Object.keys(c.fields || {}).forEach(k => {
+      if (!COLS[k]) return;
+      let v = c.fields[k];
+      if (k === 'planStart' || k === 'planIR' || k === 'planDue') v = v ? P(v) : '';
+      if (k === 'clientDate') v = v ? 'Yes' : '';
+      if (k === 'est') v = Number(v) > 0 ? Math.round(Number(v) * 100) / 100 : '';
+      r = writeCell_(r.row, c.id, COLS[k], v === null || v === undefined ? '' : v);
+    });
+    logActivity_('plan', c.id, c.title || '', me_(), 'Plan applied: ' + (c.summary || 'updated'), '');
+    n++;
+  });
+  (newItems || []).forEach(f => { bookWork(f); n++; });
+  if (draftId) deletePlanDraft(draftId);
+  return { applied: n };
+}
+// Drops the plan dates on one deliverable so Basecamp's dates apply again
+function clearPlanDates(row, id) {
+  let r = writeCell_(row, id, 34, '');
+  r = writeCell_(r.row, id, 35, ''); r = writeCell_(r.row, id, 36, '');
+  logRow_(r.row, 'timeline', 'Back to Basecamp dates (plan dates cleared)');
+  return { row: r.row, id: id };
 }
 
 // Marks the due date as a date promised to the client (Planner column AG). Plan mode won't move a locked date.

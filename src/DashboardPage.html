@@ -267,6 +267,8 @@
   .callout { border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.5; }
   .callout.warn { background: #FFF8EB; border: 1px solid #F5D9A8; color: #7C4A03; }
   .callout.info { background: #F8F9FA; border: 1px solid var(--line2); color: var(--muted); }
+  .callout.bad { background: #FEF2F2; border: 1px solid #FBCACA; color: #7F1D1D; }
+  @media (max-width: 1100px) { .grid3 { grid-template-columns: 1fr !important; } }
   .kv { display: flex; flex-direction: column; gap: 2px; } .kv .k { font-size: 12px; font-weight: 700; color: var(--soft); } .kv .v { font-size: 15px; font-weight: 700; }
   ol.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.5; }
 </style>
@@ -411,6 +413,19 @@ function wbsFillGaps(steps) {
   });
   return out;
 }
+// Phases from plan mode dates: KO on the start, development up to internal review, review, revisions, delivery on the due date
+function planWbs(s, ir, e) {
+  const days = []; for (let x = s; x <= e; x = add(x, 1)) if (isWd(x)) days.push(x);
+  if (days.length < 3) return null;
+  let k = ir ? days.findIndex(x => +x >= +ir) : -1;
+  if (k < 2) k = Math.max(2, Math.min(days.length - 1, Math.ceil(days.length * 0.75)));
+  const n = days.length, out = [{ label: 'INT KO', s: days[0], e: days[0], kind: 'milestone' }];
+  if (k - 1 >= 1) out.push({ label: 'Report development', s: days[1], e: days[k - 1], kind: 'work' });
+  out.push({ label: 'Internal review', s: days[k], e: days[k], kind: 'milestone' });
+  if (n - 2 >= k + 1) out.push({ label: 'Revisions', s: days[k + 1], e: days[n - 2], kind: 'work' });
+  if (n - 1 > k) out.push({ label: 'Delivery', s: days[n - 1], e: days[n - 1], kind: 'milestone' });
+  return out;
+}
 // Days of an item's effort that fall between s and e (before splitting across the team)
 function itemLoad(i, s, e, past) {
   if (past) return i.wbsWork ? i.wbsWork.reduce((t, x) => t + (x.e >= s && x.s <= e ? wd(maxD(x.s, s), minD(x.e, e)) : 0), 0) * i.rate : wd(maxD(i.s, s), minD(i.e, e)) * i.rate;
@@ -467,6 +482,16 @@ function winRange(i, name) {
   if (w === 'dev' && i.devE) return [i.s, i.devE];
   if (w === 'rev' && i.rwS) return [i.rwS, i.e];
   return [i.s, i.e];
+}
+const REVIEW_DAYS = 0.5;
+const isOvName = n => !!S.data && (S.data.team.find(p => p.name === n) || {}).projectRole === 'Oversight';
+// Who reviews it on internal review day: the named reviewer (default: whoever is in Oversight), or their cover while they're out
+function reviewerOf(i) {
+  const ovName = S.data ? ((S.data.team.find(p => p.projectRole === 'Oversight') || {}).name || '') : '';
+  // Default reviewer is whoever is in Oversight, unless they're hands-on on it themselves
+  let r = i.reviewer || (ovName && !(i.team.indexOf(ovName) !== -1 && (!i.overs || i.overs.indexOf(ovName) === -1)) ? ovName : '');
+  if (r && i.rwS) { const cv = covers().find(c => c.from === r && c.s <= i.rwS && c.e >= i.rwS); if (cv) r = cv.to; }
+  return r;
 }
 // One person's days on a deliverable between s and e, honoring their window
 function personLoad(i, name, s, e, past) {
@@ -572,6 +597,9 @@ function prep(d) {
       }
       if (!i.wbs) { i.wbs = parseWBS(i.brief, i.e || d.TODAY); i.wbsFrom = 'from the brief'; }
     }
+    // Plan mode dates replace the Basecamp schedule with plan phases
+    i.dueBasecampD = P(i.dueBasecamp || i.due);
+    if (i.hasPlan && i.s && i.e) { const w = planWbs(i.s, P(i.planIR), i.e); if (w) { i.wbs = w; i.wbsFrom = 'from plan mode'; } }
     // Timeline change flagged by the sync (WBS changed, due date moved, or a reply that mentions new timing) in the last 14 days
     i.tlFlag = i.flag && i.flag.at && new Date(i.flag.at) >= add(d.TODAY, -14) ? i.flag : null;
     i.wbsWork = null;
@@ -695,6 +723,8 @@ function loadFor(name, s, e) {
       t += Math.max(0, days);
     }
     inbound.forEach(c => { if (onIt(i, c.from)) t += personLoad(i, c.from, maxD(s, c.s), minD(e, c.e)); });
+    // A named reviewer who isn't on it and isn't in Oversight books half a day on internal review
+    if (i.rwS && i.rwS >= s && i.rwS <= e && reviewerOf(i) === name && i.team.indexOf(name) === -1 && !isOvName(name)) t += REVIEW_DAYS;
   });
   return t;
 }
@@ -1043,6 +1073,10 @@ const FAQ = [
     ['Add a deliverable that isn\'t in Basecamp', '<b>Add deliverable</b> (top right). Paste a Basecamp link to pull in the title, people, dates and brief, or type it in.'],
     ['Book work that isn\'t confirmed', 'Planning › <b>Book work</b>. Pick the type and size (or days), the due date and people. You\'ll see each person\'s week before and after, and who has the most room. Set Likely, Maybe or Long shot.'],
     ['Split days unevenly between people', 'Open the card › People and days. Type each person\'s hands-on days, pick when they work on it (whole project, development, or review and revisions), add what they own if it helps, and click Save split. Use default split undoes it.'],
+    ['Plan the next few weeks', 'Open Plan mode (tab, or the button on the Team timeline). Click a bar, then move it a day or a week, change its start or due date, or change who\'s on it and how many days. Load and Checks update as you go. Nothing changes for the team until you click Apply.'],
+    ['Compare two plans', 'In Plan mode, click Copy as option B, change B, and the compare table shows which option has fewer weeks over target, a lower peak, fewer review conflicts and less unstaffed work. Apply the one you want.'],
+    ['Share a plan for input', 'Plan mode › Share draft › pick a teammate. Drafts save to the Plan drafts tab in the Sheet, so they can open it from their own Plan mode tab and change it.'],
+    ['Will it fit?', 'At the bottom of Plan mode, pick tentative work or Try something new. It shows who has room and when (favoring people who know the client), drafts a WBS you can copy to the client, and can pencil it into the draft. Apply books it as Tentative.'],
     ['Mark a client date', 'On the card\'s Overview, click Mark as client date next to Due. The bar\'s end shows a lock so everyone knows that date was promised to the client.'],
     ['Hand over work', 'Open the card › People & days › Hand over. It moves the person\'s days to someone else and makes them Owner if needed. Reassign the to-do in Basecamp too.'],
     ['Record how long something really took', 'When a card moves to Delivered you\'re asked for the actual days. It powers the estimate check on Forecast.'],
@@ -1051,6 +1085,9 @@ const FAQ = [
   ]],
   ['How the numbers work', [
     ['Where do estimates come from?', 'Each deliverable Type has a day range on the Lists tab. Scale picks the low end (S), middle (M or blank) or high end (L). Override days on the Planner row beats both. Anything with no Type and no Override days counts as 0 days, so capacity reads low.'],
+    ['Does Plan mode change Basecamp?', 'No. Apply writes to the Planner only: plan dates go in their own columns (AH–AJ), so the Basecamp sync doesn\'t undo them, and the card shows the Basecamp due date beside the plan date. Update Basecamp yourself if the client-facing dates changed. Use Basecamp dates on the card drops the plan dates.'],
+    ['What is the 80% target?', 'Plan mode measures load against 80% of each person\'s available days by default, which leaves about a day a week for ad-hoc asks. Switch to 100% to see the full picture.'],
+    ['How are reviews counted?', 'Internal review is reviewed by whoever is in Oversight unless a reviewer is named in Plan mode. Their reviews are part of oversight. A named reviewer who isn\'t on the work books half a day on review day, and while someone is on leave their cover reviews.'],
     ['How are days split between people?', 'The estimate is hands-on days. Hands-on people share it equally unless the card has a split. Oversight (the Insights Director) is added on top: 25% by default, a different share per account on the Lists tab (column C, e.g. Ancestry 10%), or set for one deliverable on the card.'],
     ['What do Development and Review and revisions mean in a split?', 'Development runs from the start up to internal review; review and revisions from internal review to the due date. Internal review comes from the WBS. Without a WBS, the last quarter of the working days counts as review and revisions.'],
     ['What does "split not set" mean?', 'Two or more people are on it and nobody has set their days, so the estimate is split evenly for now. Open the card › People and days to set it.'],
@@ -1146,7 +1183,7 @@ function render() {
   const wkS = monday(T), wkE = add(wkS, 6), nwE = add(wkS, 13);
   const overdue = d.items.filter(i => i.open && i.e && i.e < T);
   const tentCount = d.items.filter(i => i.tent && i.stage !== 'Delivered').length;
-  const tabs = [['mine', 'My work', ''], ['overview', 'Overview', ''], ['pipeline', 'Planning', tentCount], ['board', 'Board', d.items.filter(i => i.open).length], ['forecast', 'Forecast', ''], ['activity', 'Activity', unseenCount(d) || ''], ['settings', 'Settings', syncProblems(d) || ''], ['faq', 'FAQ', '']];
+  const tabs = [['mine', 'My work', ''], ['overview', 'Overview', ''], ['pipeline', 'Planning', tentCount], ['plan', 'Plan mode', ''], ['board', 'Board', d.items.filter(i => i.open).length], ['forecast', 'Forecast', ''], ['activity', 'Activity', unseenCount(d) || ''], ['settings', 'Settings', syncProblems(d) || ''], ['faq', 'FAQ', '']];
 
   let h = `
   <div class="row between" style="align-items:flex-end">
@@ -1171,6 +1208,7 @@ function render() {
 
   if (S.tab === 'overview') h += overview(d, T, H, hz, { openItems, triage, overdue, wkS, wkE, nwE });
   if (S.tab === 'pipeline') h += pipeline(d);
+  if (S.tab === 'plan') h += planTab(d, T);
   if (S.tab === 'board') h += board(d, T);
   if (S.tab === 'settings') h += settings(d, T);
   if (S.tab === 'forecast') h += forecast(d, T);
@@ -1179,33 +1217,19 @@ function render() {
   try { localStorage.setItem('kh_tab', S.tab); } catch (e) {}
   if (S.tab === 'activity') { h += activity(d, T); markSeen(d); }
   document.getElementById('app').innerHTML = h;
+  if (S.tab === 'plan') planStatus();
   renderLayer();
 }
 
-function overview(d, T, H, hz, x) {
-  const dueWeek = d.items.filter(i => i.open && i.e && i.e >= T && i.e <= x.wkE).length;
-  const dueNext = d.items.filter(i => i.open && i.e && i.e > x.wkE && i.e <= x.nwE).length;
-  const people = d.people.filter(p => S.owner === 'All' || p.name === S.owner);
-  const free = d.people.reduce((t, p) => { const f = availFor(p, hz.s, hz.e) - loadFor(p.name, hz.s, hz.e); return t + (f > 0 ? f : 0); }, 0);
-  const unstaffed = d.items.filter(i => i.open && !i.team.length && i.e && i.e >= hz.s && i.s <= hz.e).reduce((t, i) => t + itemLoad(i, hz.s, hz.e), 0);
-  const k = [
-    ['Open', x.openItems.length, 'Excluding triage, on hold and dismissed', 'var(--navy)'],
-    ['Due this week', dueWeek, fmt(x.wkS) + ' to ' + fmt(x.wkE), '#92400E'],
-    ['Due next week', dueNext, fmt(add(x.wkS, 7)) + ' to ' + fmt(x.nwE), '#1E40AF'],
-    ['Past due', x.overdue.length, 'Not yet delivered', '#B91C1C'],
-    ['Team free days', free.toFixed(1), hz.label, '#047857'],
-    ['To be staffed', unstaffed.toFixed(1), 'Days with no owner · ' + hz.label, '#92400E']
-  ];
-  let h = `<div class="kpis">${k.map(([l, v, s, c]) => `<div class="kpi"><span class="l">${l}</span><span class="v" style="color:${c}">${v}</span><span class="s">${esc(s)}</span></div>`).join('')}</div>`;
-
-  // Timeline
+function timelineLanes(d, T, hz, people, opts) {
+  opts = opts || {};
   const B = bucketsFor(hz), nB = B.length;
   const bpos = dt => { for (let i = 0; i < nB; i++) { const b = B[i]; if (dt < b.s) return i; const len = Math.round((b.e - b.s) / 864e5) + 1; if (dt <= b.e) return i + Math.round((dt - b.s) / 864e5) / len; } return nB; };
   const pct = v => v / nB * 100;
   const colW = hz.gran === 'day' ? (nB === 1 ? 600 : 190) : hz.gran === 'week' ? 120 : 300;
   const usedClients = {};
   const todayStyle = T >= hz.s && T <= hz.e ? `left:${pct(bpos(T) + (hz.gran === 'day' ? 0.5 : 0.1))}%` : 'display:none';
-  const lanes = (S.owner === 'All' ? [{ name: 'To be staffed', p: null }] : []).concat(people.map(p => ({ name: p.name, p })));
+  const lanes = (opts.unstaffed ? [{ name: 'To be staffed', p: null }] : []).concat(people.map(p => ({ name: p.name, p })));
   const SOLID = ['In progress', 'Internal review', 'Client review', 'Revisions'];
   const laneHtml = lanes.map(({ name, p }) => {
     const owner = p ? p.name : '';
@@ -1215,7 +1239,7 @@ function overview(d, T, H, hz, x) {
       let bg = '#DCFCE7', fg = '#14532D', lab;
       if (!p) { lab = used > 0.05 ? used.toFixed(1) + ' d' : '—'; bg = used > 0.05 ? '#FFF7ED' : '#F9FAFB'; fg = used > 0.05 ? '#9A3412' : '#6B7280'; }
       else if (avail === 0) { lab = used > 0.05 ? 'Out · ' + used.toFixed(1) + ' d' : 'Out'; bg = used > 0.05 ? '#FEE2E2' : '#F1F2F5'; fg = used > 0.05 ? '#7F1D1D' : '#5F6775'; }
-      else { const v = Math.round(used / avail * 100); lab = v + '%'; if (v > 100) { bg = '#FEE2E2'; fg = '#7F1D1D'; } else if (v >= 70) { bg = '#FEF3C7'; fg = '#78350F'; } }
+      else { const cap = avail * (opts.target || 1), v = Math.round(used / cap * 100); lab = opts.target ? used.toFixed(1) + ' / ' + cap.toFixed(1) + ' d' : v + '%'; if (v > 100) { bg = '#FEE2E2'; fg = '#7F1D1D'; } else if (v >= (opts.target ? 85 : 70)) { bg = '#FEF3C7'; fg = '#78350F'; } }
       return `<span class="lc" style="background:${bg};color:${fg}" title="${p ? used.toFixed(1) + ' of ' + avail.toFixed(1) + ' d booked' : used.toFixed(1) + ' d with no owner'}">${lab}</span>`;
     }).join('');
     // Time off, holidays and Summer Fridays: hatched, labeled
@@ -1289,7 +1313,7 @@ function overview(d, T, H, hz, x) {
         if (atDue) meta.push(past ? 'past due' : dueToday ? 'due today' : 'due ' + DOW[i.e.getDay()] + ' ' + fmt(i.e));
       }
       const lock = atDue && !cutR && i.clientDate ? `<span class="lk" title="Client date">${I.lock}</span>` : '';
-      return `<button class="bar${ov ? ' ovb' : ''}" data-open="${esc(i.id)}" title="${esc(i.title)}${ov ? ' (oversight)' : ''}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${top}px;left:calc(${pct(l)}% + 3px);width:calc(${pct(w)}% - 6px);min-width:30px;${look};${past ? 'box-shadow:0 0 0 2px #fff,0 0 0 4px #DC2626;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
+      return `<button class="bar${ov ? ' ovb' : ''}" ${opts.pick ? 'data-pl="sel" data-id' : 'data-open'}="${esc(i.id)}" title="${esc(i.title)}${ov ? ' (oversight)' : ''}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${top}px;left:calc(${pct(l)}% + 3px);width:calc(${pct(w)}% - 6px);min-width:30px;${look};${opts.sel === i.id ? 'box-shadow:0 0 0 3px #fff,0 0 0 5px #7C3AED;z-index:3;' : past ? 'box-shadow:0 0 0 2px #fff,0 0 0 4px #DC2626;' : ''}${i.isNew || i.planned ? 'outline:2px dashed #7C3AED;outline-offset:1px;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
         ${segs}<span class="t"${wide || ov ? '' : ' style="max-width:100%"'}>${cutL ? '← ' : ''}${esc(i.title)}</span>${wide || ov ? `<span class="m">${meta.join(' · ')}${cutR ? ' →' : ''}</span>` : ''}${lock}</button>`;
     }).join('');
     const trackH = 12 + (rowH.length ? rowH.reduce((t, h) => t + h, 0) : 40);
@@ -1316,9 +1340,30 @@ function overview(d, T, H, hz, x) {
     </div>`;
   }).join('');
 
+  return { B, nB, colW, usedClients, laneHtml };
+}
+
+function overview(d, T, H, hz, x) {
+  const dueWeek = d.items.filter(i => i.open && i.e && i.e >= T && i.e <= x.wkE).length;
+  const dueNext = d.items.filter(i => i.open && i.e && i.e > x.wkE && i.e <= x.nwE).length;
+  const people = d.people.filter(p => S.owner === 'All' || p.name === S.owner);
+  const free = d.people.reduce((t, p) => { const f = availFor(p, hz.s, hz.e) - loadFor(p.name, hz.s, hz.e); return t + (f > 0 ? f : 0); }, 0);
+  const unstaffed = d.items.filter(i => i.open && !i.team.length && i.e && i.e >= hz.s && i.s <= hz.e).reduce((t, i) => t + itemLoad(i, hz.s, hz.e), 0);
+  const k = [
+    ['Open', x.openItems.length, 'Excluding triage, on hold and dismissed', 'var(--navy)'],
+    ['Due this week', dueWeek, fmt(x.wkS) + ' to ' + fmt(x.wkE), '#92400E'],
+    ['Due next week', dueNext, fmt(add(x.wkS, 7)) + ' to ' + fmt(x.nwE), '#1E40AF'],
+    ['Past due', x.overdue.length, 'Not yet delivered', '#B91C1C'],
+    ['Team free days', free.toFixed(1), hz.label, '#047857'],
+    ['To be staffed', unstaffed.toFixed(1), 'Days with no owner · ' + hz.label, '#92400E']
+  ];
+  let h = `<div class="kpis">${k.map(([l, v, s, c]) => `<div class="kpi"><span class="l">${l}</span><span class="v" style="color:${c}">${v}</span><span class="s">${esc(s)}</span></div>`).join('')}</div>`;
+
+  const { B, nB, colW, usedClients, laneHtml } = timelineLanes(d, T, hz, people, { unstaffed: S.owner === 'All' });
+
   h += `<div class="card" style="gap:16px">
     <div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Team timeline</h2><span class="sub">${hz.label}: ${fmt(hz.s)}${hz.e > hz.s ? ' to ' + fmt(hz.e) : ''} · ${wd(hz.s, hz.e)} working days</span></div>
-      <div class="seg" role="group" aria-label="Time span">${Object.keys(H).map(k => `<button class="${S.horizon === k ? 'on' : ''}" data-h="${k}">${H[k].label}</button>`).join('')}</div></div>
+      <div class="row" style="gap:10px"><div class="seg" role="group" aria-label="Time span">${Object.keys(H).map(k => `<button class="${S.horizon === k ? 'on' : ''}" data-h="${k}">${H[k].label}</button>`).join('')}</div><button class="btn primary" data-tab="plan">Plan mode</button></div></div>
     <div class="row between">
       <div class="legend">
         <span><span class="sw" style="background:#2557D6;width:22px"></span>In progress</span>
@@ -1686,6 +1731,7 @@ function overviewPane(i, d) {
     <dl class="facts">
       <dt>Lead</dt><dd>${esc(i.lead || '—')}${i.owner && i.owner !== i.lead ? ' <span class="sub">(Owner: ' + esc(i.owner) + ')</span>' : ''}</dd>
       <dt>Due</dt><dd>${(i.dueBC || (!i.wbs && i.e)) ? dayLabel(i.dueBC || i.e) + (i.wbs ? ' <span class="sub">Basecamp</span>' : '') : (i.wbs ? 'Not set in Basecamp' : '—')}
+        ${i.hasPlan ? `<br><span class="sub">Plan mode date${i.dueBasecampD && i.e && +i.dueBasecampD !== +i.e ? ' · Basecamp says ' + dayLabel(i.dueBasecampD) : ''}</span> <button class="pill" data-act="clear-plan" data-id="${esc(i.id)}" title="Drop the plan mode dates and use Basecamp's again">Use Basecamp dates</button>` : ''}
         ${i.e ? `<button class="pill ${i.clientDate ? 'on' : ''}" style="margin-left:6px" data-act="client-date" data-id="${esc(i.id)}" aria-pressed="${i.clientDate ? 'true' : 'false'}" title="A due date promised to the client">${I.lock} ${i.clientDate ? 'Client date' : 'Mark as client date'}</button>` : ''}</dd>
       <dt>Type</dt><dd>${esc(i.type || '—')}${i.est ? ' · ' + i.est.toFixed(1) + ' d' : ''}</dd>
       <dt>In Basecamp</dt><dd>${esc(i.assigned || '—')}</dd>
@@ -2084,6 +2130,13 @@ document.addEventListener('click', e => {
       .withFailureHandler(err => { el.disabled = false; toast('Could not hand over: ' + err.message); })
       .handOver(item.row, item.id, text, total, newOwner, from, to);
   }
+  else if (el.dataset.act === 'clear-plan') {
+    const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
+    el.disabled = true;
+    google.script.run.withSuccessHandler(() => { toast('Back to Basecamp dates'); load(); })
+      .withFailureHandler(err => { el.disabled = false; toast('Could not update: ' + err.message); })
+      .clearPlanDates(item.row, item.id);
+  }
   else if (el.dataset.act === 'client-date') {
     const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
     const on = !item.clientDate;
@@ -2258,10 +2311,373 @@ document.addEventListener('drop', e => {
   else render();
 });
 
+/* ===== Plan mode =====
+   A draft is a set of changes on top of the live planner. Each option (A, B) holds
+   { items: { [id]: { split, est, planStart, planIR, planDue, reviewer, clientDate } }, added: [ new pipeline work ] }.
+   Drafts save to the Sheet's "Plan drafts" tab; Apply writes to the Planner only (Basecamp is untouched). */
+S.plan = { drafts: null, draft: null, cur: 'A', sel: null, target: 0.8, saving: false, savedAt: '', confirm: '', blocked: '', share: false, fit: null };
+const isoOf = x => x ? x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0') : '';
+const newOption = () => ({ items: {}, added: [] });
+function planNewDraft() { return { id: '', name: 'Plan · ' + fmt(S.data.TODAY), author: S.data.meTeam || '', shared: [], options: { A: newOption() } }; }
+function planOpt() { const p = S.plan; if (!p.draft) p.draft = planNewDraft(); return p.draft.options[p.cur] || (p.draft.options[p.cur] = newOption()); }
+// Working-day steps (weekends and holidays skipped)
+function shiftWd(x, n) { let y = x, k = 0; const st = n < 0 ? -1 : 1; while (k < Math.abs(n)) { y = add(y, st); if (isWd(y)) k++; } return y; }
+function nthWd(s, n) { let y = s, k = isWd(s) ? 1 : 0; while (k < n) { y = add(y, 1); if (isWd(y)) k++; } return y; }
+
+// The planner as it would be with an option's changes, fully modeled
+function draftModel(opt) {
+  const d = JSON.parse(JSON.stringify(S.raw));
+  d.items.forEach(i => {
+    const c = opt.items[i.id]; if (!c) return;
+    if (c.split !== undefined) i.split = c.split;
+    if (c.est !== undefined) i.est = c.est;
+    if (c.reviewer !== undefined) i.reviewer = c.reviewer;
+    if (c.clientDate !== undefined) i.clientDate = c.clientDate;
+    if (c.planStart !== undefined) { i.planStart = c.planStart; if (c.planStart) i.workStart = c.planStart; }
+    if (c.planDue !== undefined) { i.planDue = c.planDue; if (c.planDue) i.due = c.planDue; }
+    if (c.planIR !== undefined) i.planIR = c.planIR;
+    i.hasPlan = !!(i.planStart || i.planDue || i.planIR);
+    i.planned = true;
+  });
+  (opt.added || []).forEach((a, k) => {
+    const t = d.items[0] ? JSON.parse(JSON.stringify(d.items[0])) : {};
+    Object.keys(t).forEach(x => { t[x] = Array.isArray(t[x]) ? [] : typeof t[x] === 'boolean' ? false : ''; });
+    Object.assign(t, { row: 0, id: 'NEW-' + (k + 1), account: a.account || 'Other', project: 'Planning', title: a.title, type: 'Other', est: a.days, owner: (a.people || [])[0] || '',
+      assigned: (a.people || []).join(', '), stage: 'Not started', start: a.start, due: a.due, workStart: a.start, booking: 'Tentative', likelihood: a.likelihood || 'Likely', split: a.split || '', replies: [], lite: false, hasPlan: true, planStart: a.start, planDue: a.due, isNew: true, priority: 'Medium' });
+    d.items.push(t);
+  });
+  const m = prep(d);
+  m.items.forEach(i => { if (opt.items[i.id]) i.planned = true; });
+  return m;
+}
+function withData(dd, fn) { const keep = S.data; S.data = dd; try { return fn(); } finally { S.data = keep; } }
+
+// Over-target weeks, peak load, review conflicts, unstaffed days, client dates moved
+function planMetrics(dd, target, s, e) {
+  const baseItems = S.data.items;
+  return withData(dd, () => {
+    let over = 0, peak = 0, conflicts = 0;
+    dd.people.forEach(p => { for (let w = s; w <= e; w = add(w, 7)) { const a = availFor(p, w, add(w, 4)), u = loadFor(p.name, w, add(w, 4)); if (a > 0) { peak = Math.max(peak, u / a); if (u > a * target + 0.05) over++; } else if (u > 0.05) over++; } });
+    dd.items.filter(i => i.open && i.rwS && i.rwS >= s).forEach(i => { const r = reviewerOf(i); if (r && i.team.indexOf(r) !== -1 && i.overs.indexOf(r) === -1) conflicts++; });
+    const unstaffed = dd.items.filter(i => i.open && !i.team.length && i.e && i.e >= s).reduce((t, i) => t + (i.handsEst || i.est || 0), 0);
+    const moved = dd.items.filter(i => { const b = baseItems.find(x => x.id === i.id); return b && b.clientDate && b.e && i.e && +b.e !== +i.e; }).length;
+    return { over, peak: Math.round(peak * 100), conflicts, unstaffed, moved };
+  });
+}
+
+// Problems in a draft, most serious first
+function planChecks(dd, target, s, e) {
+  return withData(dd, () => {
+    const out = [];
+    const isOutDay = (p, x) => !isWd(x) || (p.lastD && x > p.lastD) || (p.startD && x < p.startD) || p.off.some(o => !o.half && o.s <= x && o.e >= x);
+    dd.items.filter(i => i.open && i.s && i.e && i.e >= s && i.s <= e).forEach(i => {
+      i.team.filter(n => i.overs.indexOf(n) === -1).forEach(n => {
+        const p = dd.people.find(x => x.name === n); if (!p) return;
+        const [a, b] = winRange(i, n); if (!a || !b) return;
+        let out0 = 0, total = 0; for (let x = a; x <= b; x = add(x, 1)) { if (!isWd(x)) continue; total++; if (isOutDay(p, x)) out0++; }
+        const cv = covers().find(c => c.from === n && c.s <= b && c.e >= a);
+        if (out0 && !cv) out.push(['red', i.id, i.title, n + ' is out ' + out0 + ' of the ' + total + ' working days they\'re on it.']);
+        else if (out0 && cv) out.push(['amber', i.id, i.title, n + ' is out ' + out0 + ' of ' + total + ' days. ' + cv.to + ' covers.']);
+        if (i.hasSplit && daysFor(i, n) > total + 0.01) out.push(['red', i.id, i.title, n + ' has ' + daysFor(i, n) + ' d of work in a ' + total + '-day window (' + WIN_LABEL[winOf(i, n)] + ').']);
+      });
+      const r = reviewerOf(i);
+      if (i.rwS && r && i.team.indexOf(r) !== -1 && i.overs.indexOf(r) === -1) out.push(['red', i.id, i.title, r + ' would review work they\'re on (' + dayLabel(i.rwS) + '). Pick another reviewer.']);
+      else if (i.rwS && i.reviewer && r !== i.reviewer) out.push(['amber', i.id, i.title, i.reviewer + ' is out for internal review on ' + dayLabel(i.rwS) + '. ' + r + ' reviews.']);
+      if (i.rwS && wd(i.s, add(i.rwS, -1)) < 2) out.push(['amber', i.id, i.title, 'Less than two days of development before internal review.']);
+      if (i.needsSplit) out.push(['amber', i.id, i.title, i.team.filter(n => i.overs.indexOf(n) === -1).length + ' people on it and no split yet. Set their days below.']);
+      if (!i.handsEst && i.team.length) out.push(['amber', i.id, i.title, 'No estimate, so it books no time.']);
+    });
+    dd.people.forEach(p => { for (let w = s; w <= e; w = add(w, 7)) { const a = availFor(p, w, add(w, 4)), u = loadFor(p.name, w, add(w, 4)); if (a > 0 && u > a * target + 0.05) out.push(['red', '', p.name + ' · wk of ' + fmt(w), u.toFixed(1) + ' d booked against ' + (a * target).toFixed(1) + ' d (' + Math.round(target * 100) + '% target).']); } });
+    const revs = {};
+    dd.items.filter(i => i.open && i.rwS && i.rwS >= s && i.rwS <= e).forEach(i => { const r = reviewerOf(i); if (!r || i.team.indexOf(r) !== -1) return; const k = r + '|' + isoOf(monday(i.rwS)); revs[k] = (revs[k] || 0) + 1; });
+    Object.keys(revs).forEach(k => { if (revs[k] >= 3) { const [r, w] = k.split('|'); out.push(['amber', '', r + ' · wk of ' + fmt(P(w)), revs[k] + ' internal reviews in one week.']); } });
+    return out.sort((a, b) => (a[0] === 'red' ? 0 : 1) - (b[0] === 'red' ? 0 : 1));
+  });
+}
+
+// What changed in an option, in words, against the live planner
+function planChanges(dd, opt) {
+  const base = S.data, out = [];
+  const allocStr = i => i.team.length ? i.team.map(n => n + ' ' + (Math.round(daysFor(i, n) * 10) / 10) + ' d' + (i.overs.indexOf(n) !== -1 ? ' (oversight)' : winOf(i, n) !== 'all' ? ' (' + WIN_LABEL[winOf(i, n)] + ')' : '')).join(', ') : 'no one';
+  Object.keys(opt.items).forEach(id => {
+    const b = base.items.find(x => x.id === id), i = dd.items.find(x => x.id === id); if (!b || !i) return;
+    const bits = [];
+    if (allocStr(b) !== allocStr(i)) bits.push('people: ' + allocStr(i));
+    if (b.s && i.s && +b.s !== +i.s) bits.push('starts ' + fmt(i.s) + ' (was ' + fmt(b.s) + ')');
+    if (b.rwS && i.rwS && +b.rwS !== +i.rwS) bits.push('internal review ' + fmt(i.rwS) + ' (was ' + fmt(b.rwS) + ')');
+    if (b.e && i.e && +b.e !== +i.e) bits.push('due ' + fmt(i.e) + ' (was ' + fmt(b.e) + ')');
+    if (Math.abs((b.handsEst || 0) - (i.handsEst || 0)) > 0.01) bits.push('estimate ' + (i.handsEst || 0).toFixed(1) + ' d');
+    if ((b.reviewer || '') !== (i.reviewer || '')) bits.push('reviewer ' + (i.reviewer || 'default'));
+    if (!!b.clientDate !== !!i.clientDate) bits.push(i.clientDate ? 'marked as a client date' : 'client date unlocked');
+    if (b.ovPct !== i.ovPct && i.overs.length) bits.push('oversight ' + Math.round(i.ovPct * 100) + '%');
+    if (bits.length) out.push({ id, title: i.title, text: bits.join(' · ') });
+  });
+  (opt.added || []).forEach((a, k) => out.push({ id: 'NEW-' + (k + 1), title: a.title, text: 'new tentative booking · ' + ((a.people || []).join(', ') || 'no owner') + ' · ' + fmt(P(a.start)) + ' to ' + fmt(P(a.due)) + ' · ' + a.days + ' d', added: k }));
+  return out;
+}
+
+function planSave() {
+  const p = S.plan; if (!p.draft) return;
+  clearTimeout(p.timer);
+  p.timer = setTimeout(() => {
+    p.saving = true; planStatus();
+    google.script.run.withSuccessHandler(r => { p.draft.id = r.id; p.saving = false; p.savedAt = r.updated; planStatus(); })
+      .withFailureHandler(err => { p.saving = false; planStatus(); toast('Could not save the draft: ' + err.message); })
+      .savePlanDraft({ id: p.draft.id, name: p.draft.name, options: p.draft.options });
+  }, 1200);
+}
+function planStatus() { const el = document.getElementById('planSaved'); if (el) el.textContent = S.plan.saving ? 'Saving…' : S.plan.savedAt ? 'Draft saved ' + new Date(S.plan.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'Draft · not saved yet'; }
+function planChange(id, fields) { const o = planOpt(); o.items[id] = Object.assign({}, o.items[id] || {}, fields); S.plan.blocked = ''; planSave(); render(); }
+
+// Split rows for the selected deliverable (hands-on people), from the draft model
+function splitRowsOf(i) { return i.team.filter(n => i.overs.indexOf(n) === -1).map(n => ({ name: n, days: Math.round(daysFor(i, n) * 100) / 100, win: winOf(i, n), owns: (i.owns || {})[n] || '' })); }
+function setSplitRows(i, rows) { planChange(i.id, { split: splitText(rows, i.ovCustom ? i.ovPct : null) }); }
+
+/* What-if: fit pipeline work. Candidates are tentative items already in the planner, or something new typed in. */
+function familiarity(n, account) {
+  const yr = add(S.data.TODAY, -365), c = clientOf(account);
+  return S.data.items.filter(i => i.stage === 'Delivered' && i.e && i.e >= yr && i.client === c && i.team.indexOf(n) !== -1 && i.overs.indexOf(n) === -1).length;
+}
+function fitScore(dd, n, start, len, est, needBy, target, skipId) {
+  return withData(dd, () => {
+    const p = dd.people.find(x => x.name === n); if (!p) return null;
+    const end = nthWd(start, len);
+    if (needBy && end > needBy) return { late: true, end };
+    let outN = 0; for (let x = start; x <= end; x = add(x, 1)) if (isWd(x) && ((p.lastD && x > p.lastD) || p.off.some(o => !o.half && o.s <= x && o.e >= x))) outN++;
+    if (outN) return { out: outN, end };
+    const per = est / Math.max(1, len);
+    let peak = 0;
+    for (let w = monday(start); w <= end; w = add(w, 7)) {
+      const a = availFor(p, w, add(w, 4)); if (!a) continue;
+      const own = skipId ? dd.items.filter(i => i.id === skipId).reduce((t, i) => t + personLoad(i, n, w, add(w, 4)), 0) : 0;
+      const add0 = wd(maxD(w, start), minD(add(w, 4), end)) * per;
+      peak = Math.max(peak, (loadFor(n, w, add(w, 4)) - own + add0) / (a * target));
+    }
+    return { peak, end };
+  });
+}
+function draftWbsText(start, end) {
+  const w = planWbs(start, null, end); if (!w) return '';
+  return 'Tentative WBS:\n' + w.map(x => '• ' + x.label + ': ' + (+x.s === +x.e ? DOW[x.s.getDay()] + ', ' + fmt(x.s) : fmt(x.s) + ' - ' + (x.s.getMonth() === x.e.getMonth() ? x.e.getDate() : fmt(x.e)))).join('\n');
+}
+
+function planTab(d, T) {
+  const P0 = S.plan;
+  if (!S.raw) return '<div class="card"><div class="sub">Loading…</div></div>';
+  if (P0.drafts === null) { P0.drafts = []; google.script.run.withSuccessHandler(list => { P0.drafts = list || []; if (!P0.draft && list && list.length) { const x = list[0]; P0.draft = { id: x.id, name: x.name, author: x.author, shared: x.shared, options: x.options && x.options.A ? x.options : { A: newOption() } }; P0.cur = 'A'; } render(); }).withFailureHandler(() => {}).listPlanDrafts(); }
+  if (!P0.draft) P0.draft = planNewDraft();
+  const opts = P0.draft.options, keys = Object.keys(opts);
+  if (keys.indexOf(P0.cur) === -1) P0.cur = keys[0];
+  const target = P0.target, W0 = monday(T), W1 = add(W0, 7 * 8 - 3);
+  const hz = { label: 'Next 8 weeks', s: W0, e: W1, gran: 'week' };
+  const dd = draftModel(opts[P0.cur]);
+  const lanesOut = withData(dd, () => timelineLanes(dd, T, hz, dd.people, { unstaffed: true, pick: true, sel: P0.sel, target }));
+  const checks = planChecks(dd, target, W0, W1);
+  const changes = planChanges(dd, opts[P0.cur]);
+  const overN = checks.filter(c => c[2].indexOf(' · wk of ') !== -1 && c[0] === 'red').length;
+  const shareable = d.people.filter(p => p.name !== d.meTeam && !(p.lastD && p.lastD < T));
+
+  // Options and compare
+  const tabs = keys.map(k => `<button class="pill ${k === P0.cur ? 'on' : ''}" data-pl="opt" data-k="${k}">Option ${k}</button>`).join('') + (keys.length < 2 ? '<button class="pill" data-pl="copyopt" style="border-style:dashed">+ Copy as option B</button>' : '<button class="pill" data-pl="dropopt" title="Remove option B">Remove B</button>');
+  let compare = '';
+  if (keys.length > 1) {
+    const mA = planMetrics(draftModel(opts.A), target, W0, W1), mB = planMetrics(draftModel(opts.B), target, W0, W1);
+    const cols = [['over', 'Weeks over target', v => v], ['peak', 'Peak load', v => v + '%'], ['conflicts', 'Review conflicts', v => v], ['unstaffed', 'Unstaffed', v => v.toFixed(1) + ' d'], ['moved', 'Client dates moved', v => v]];
+    const cell = (v, w, f) => `<td style="font-weight:700;color:${v < w ? '#047857' : v > w ? '#B91C1C' : 'var(--ink)'}">${f(v)}</td>`;
+    compare = `<div class="card" style="gap:8px"><span class="lbl">Compare options</span><div style="overflow-x:auto"><table class="t fc" style="width:auto"><thead><tr><th></th>${cols.map(c => `<th>${c[1]}</th>`).join('')}</tr></thead><tbody>
+      <tr><td style="font-weight:700;text-align:left">Option A</td>${cols.map(c => cell(mA[c[0]], mB[c[0]], c[2])).join('')}</tr>
+      <tr><td style="font-weight:700;text-align:left">Option B</td>${cols.map(c => cell(mB[c[0]], mA[c[0]], c[2])).join('')}</tr></tbody></table></div></div>`;
+  }
+
+  // Estimates
+  const noEst = dd.items.filter(i => i.open && !i.tent && i.team.length && !i.handsEst && i.e && i.e >= T).slice(0, 6);
+  const estStrip = noEst.length ? `<div class="row" style="gap:8px"><span class="lbl" style="color:#92400E">Needs an estimate:</span>${noEst.map(i => `<span class="pill" style="cursor:default;gap:4px;padding-right:4px">${esc(i.title.length > 28 ? i.title.slice(0, 27) + '…' : i.title)}${[4, 8, 12].map((v, k) => `<button class="chip" style="border:0;cursor:pointer;background:#FEF3C7;color:#78350F" data-pl="est" data-id="${esc(i.id)}" data-v="${v}">${'SML'[k]} · ${v} d</button>`).join('')}</span>`).join('')}</div>` : '';
+
+  // Selected deliverable
+  const sel = P0.sel ? dd.items.find(i => i.id === P0.sel) : null;
+  let selHtml = '<div class="sub">Click a bar on the timeline to move it, change its dates, or change who works on it.</div>';
+  if (sel) {
+    const rows = splitRowsOf(sel);
+    const ph = sel.wbs ? sel.wbs.map(x => `<div class="row between" style="padding:6px 0;border-top:1px solid var(--line2)"><span>${esc(x.label)}${x.label === 'Internal review' && reviewerOf(sel) ? ' · ' + esc(reviewerOf(sel)) : ''}</span><b>${+x.s === +x.e ? dayLabel(x.s) : fmt(x.s) + ' – ' + fmt(x.e)}</b></div>`).join('') : `<div class="sub">${sel.s && sel.e ? fmt(sel.s) + ' to ' + fmt(sel.e) : 'No dates yet'}</div>`;
+    const step = (k, l, hint) => `<div style="display:flex;flex-direction:column;gap:4px"><span class="lbl">${l}</span><div class="row" style="gap:4px;flex-wrap:nowrap">${[[-5, '−1 wk'], [-1, '−1 d'], [1, '+1 d'], [5, '+1 wk']].map(([n, t]) => `<button class="btn ghost" style="min-height:34px;padding:0 10px" data-pl="${k}" data-n="${n}" aria-label="${l}: ${t}">${t}</button>`).join('')}</div><span class="sub">${hint}</span></div>`;
+    const revOpts = d.people.filter(p => !(p.lastD && p.lastD < T));
+    const others = d.people.filter(p => p.projectRole !== 'Oversight' && sel.team.indexOf(p.name) === -1 && !(p.lastD && sel.s && p.lastD < sel.s));
+    selHtml = `<div class="row between" style="align-items:flex-start"><div style="display:flex;flex-direction:column;gap:2px"><span class="lbl" style="color:var(--accent)">Selected</span><b style="font-size:16px">${esc(sel.title)}</b><span class="sub">${esc(sel.client)} · ${(sel.handsEst || 0).toFixed(1)} d hands-on${sel.ovDays ? ' + ' + sel.ovDays.toFixed(1) + ' d oversight' : ''}${sel.dueBasecampD && sel.e && +sel.dueBasecampD !== +sel.e ? ' · Basecamp due ' + fmt(sel.dueBasecampD) : ''}</span></div>
+        <button class="btn ghost" data-open="${esc(sel.id)}" ${sel.isNew ? 'disabled' : ''}>Open card</button></div>
+      <div class="row" style="gap:16px;align-items:flex-start;flex-wrap:wrap">${step('move', 'Move whole project', 'All phases and people move together')}${step('start', 'Start', 'Development absorbs it')}${step('due', 'Due', 'Review and revisions keep their length')}</div>
+      ${P0.blocked ? `<div class="callout warn">${esc(P0.blocked)}</div>` : ''}
+      <div>${ph}</div>
+      <div class="row" style="gap:8px"><button class="pill ${sel.clientDate ? 'on' : ''}" data-pl="lock">${I.lock} ${sel.clientDate ? 'Client date · locked' : 'Lock as client date'}</button>
+        <span class="lbl">Reviewer</span><select class="sel" data-plc="reviewer" style="width:auto">${['<option value="">Default (oversight)</option>'].concat(revOpts.map(p => `<option value="${esc(p.name)}" ${sel.reviewer === p.name ? 'selected' : ''}>${esc(p.name)}</option>`)).join('')}</select></div>
+      <div style="display:flex;flex-direction:column;gap:6px"><div class="row between"><span class="lbl">People and days</span><span class="sub">${rows.length ? rows.map(r => esc(r.name.split(' ')[0]) + ' ' + r.days).join(' · ') : 'Nobody yet'}</span></div>
+        ${rows.map((r, k) => `<div class="sp on" style="display:grid;grid-template-columns:minmax(100px,1fr) auto minmax(150px,1.2fr) auto;gap:8px;align-items:center"><span><b>${esc(r.name)}</b>${r.owns ? `<br><span class="sub">Owns ${esc(r.owns)}</span>` : ''}</span>
+          <span class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn ghost" style="min-height:32px;padding:0 10px" data-pl="days" data-k="${k}" data-n="-0.5" aria-label="Half a day less for ${esc(r.name)}">−</button><b style="min-width:44px;text-align:center">${r.days} d</b><button class="btn ghost" style="min-height:32px;padding:0 10px" data-pl="days" data-k="${k}" data-n="0.5" aria-label="Half a day more for ${esc(r.name)}">+</button></span>
+          <select class="sel" data-plc="win" data-k="${k}" aria-label="When ${esc(r.name)} works on it">${[['all', 'Whole project'], ['dev', 'Development'], ['rev', 'Review and revisions']].map(o => `<option value="${o[0]}" ${o[0] === r.win ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+          <button class="x" data-pl="rmp" data-k="${k}" aria-label="Take ${esc(r.name)} off it">${I.close}</button></div>`).join('')}
+        ${others.length ? `<div class="row" style="gap:6px"><span class="lbl">Add</span>${others.map(p => { const sc = fitScore(dd, p.name, sel.s || T, Math.max(1, wd(sel.s || T, sel.e || T)), 1, null, target, ''); const tag = !sc ? '' : sc.out ? 'out ' + sc.out + ' d' : Math.round(sc.peak * 100) + '% of target'; return `<button class="pill" style="border-style:dashed" data-pl="addp" data-n="${esc(p.name)}">+ ${esc(p.name)}${tag ? ' · ' + tag : ''}</button>`; }).join('')}</div>` : ''}
+        ${sel.overs.length || d.team.some(p => p.projectRole === 'Oversight') ? `<div class="row" style="gap:8px"><span class="lbl">Oversight</span><select class="sel" data-plc="ov" style="width:auto">${[['', 'Account default'], ['0', 'None'], ['0.05', '5%'], ['0.1', '10%'], ['0.25', '25%']].map(o => `<option value="${o[0]}" ${(sel.ovCustom ? String(sel.ovPct) : '') === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select><span class="sub">${sel.overs.length ? sel.ovDays.toFixed(1) + ' d on top' : 'Counts once someone in Oversight is on it'}</span></div>` : ''}
+      </div>`;
+  }
+
+  // What-if: pipeline
+  const pipe = d.items.filter(i => i.tent && i.open).slice(0, 8);
+  const F = P0.fit;
+  let fitHtml = `<div class="row" style="gap:6px">${pipe.map(i => `<button class="pill ${F && F.id === i.id ? 'on' : ''}" data-pl="fitpick" data-id="${esc(i.id)}">${esc(i.title.length > 30 ? i.title.slice(0, 29) + '…' : i.title)}</button>`).join('') || '<span class="sub">Nothing tentative right now.</span>'}<button class="pill ${F && F.isNew ? 'on' : ''}" data-pl="fitnew" style="border-style:dashed">+ Try something new</button></div>`;
+  if (F) {
+    const startD = P(F.start), len = Math.max(1, F.len), needBy = F.needBy ? P(F.needBy) : null;
+    const team = d.people.filter(p => p.projectRole !== 'Oversight' && !(p.lastD && p.lastD < T));
+    // Once it's in the draft, leave its own days out of the comparison
+    const skip = F.isNew ? (F.inDraft && F.addedIdx !== undefined ? 'NEW-' + (F.addedIdx + 1) : '') : F.id;
+    const scored = team.map(p => ({ p, sc: fitScore(dd, p.name, startD, len, F.days, needBy, target, skip), fam: familiarity(p.name, F.account) }));
+    let best = null;
+    team.forEach(p => { for (let st = maxD(T, monday(T)); st <= (needBy ? add(needBy, -len) : add(T, 42)); st = add(st, 1)) { if (!isWd(st)) continue; const sc = fitScore(dd, p.name, st, len, F.days, needBy, target, skip); if (!sc || sc.out || sc.late || sc.peak > 1) continue; const v = sc.peak - 0.15 * Math.min(1, familiarity(p.name, F.account) / 8); if (!best || v < best.v - 0.03 || (Math.abs(v - best.v) <= 0.03 && st < best.st)) best = { p: p.name, st, v, peak: sc.peak }; } });
+    const end = nthWd(startD, len);
+    const tagOf = sc => !sc ? '' : sc.late ? 'lands after ' + fmt(needBy) : sc.out ? 'out ' + sc.out + ' d' : Math.round(sc.peak * 100) + '% · ' + (sc.peak > 1 ? 'over' : sc.peak >= 0.85 ? 'tight' : 'fits');
+    const toneOf = sc => !sc || sc.late || sc.out || sc.peak > 1 ? 'background:#FEE2E2;color:#7F1D1D' : sc.peak >= 0.85 ? 'background:#FEF3C7;color:#78350F' : 'background:#DCFCE7;color:#14532D';
+    fitHtml += `<div class="grid2" style="gap:14px;margin-top:10px">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${F.isNew ? `<div class="row" style="gap:8px"><label class="f" style="flex:2">What<input class="sel" data-plc="fit" data-f="title" value="${esc(F.title)}"></label><label class="f" style="flex:1">Client<select class="sel" data-plc="fit" data-f="account">${d.lists.accounts.map(a => `<option ${a === F.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></label></div>
+          <div class="row" style="gap:8px"><label class="f">Days<input class="sel" type="number" min="0.5" step="0.5" data-plc="fit" data-f="days" value="${F.days}"></label><label class="f">Working days long<input class="sel" type="number" min="1" step="1" data-plc="fit" data-f="len" value="${F.len}"></label><label class="f">Needed by<input class="sel" type="date" data-plc="fit" data-f="needBy" value="${esc(F.needBy || '')}"></label></div>` : `<div class="sub">${esc(F.title)} · ${esc(F.account)} · ${F.days.toFixed(1)} d over ${len} working days${needBy ? ' · needed by ' + fmt(needBy) : ''}</div>`}
+        <div class="callout info"><b>Best fit:</b> ${best ? `${esc(best.p)}, starting ${dayLabel(best.st)}. Peaks at ${Math.round(best.peak * 100)}% of target${familiarity(best.p, F.account) ? ' and has delivered ' + familiarity(best.p, F.account) + ' ' + esc(clientOf(F.account)) + (familiarity(best.p, F.account) === 1 ? ' project' : ' projects') + ' this year' : ''}. <button class="btn ghost" style="min-height:30px;margin-left:6px" data-pl="usebest" data-n="${esc(best.p)}" data-s="${isoOf(best.st)}">Use this</button>` : 'Nobody has room before it\'s needed. Talk to the client about timing, or relax the target.'}</div>
+        <div class="row" style="gap:6px"><span class="lbl">Start</span>${[[-5, '−1 wk'], [-1, '−1 d']].map(([n, t]) => `<button class="btn ghost" style="min-height:32px;padding:0 10px" data-pl="fitstart" data-n="${n}">${t}</button>`).join('')}<b>${dayLabel(startD)} → ${dayLabel(end)}</b>${[[1, '+1 d'], [5, '+1 wk']].map(([n, t]) => `<button class="btn ghost" style="min-height:32px;padding:0 10px" data-pl="fitstart" data-n="${n}">${t}</button>`).join('')}</div>
+        <div style="display:flex;flex-direction:column;gap:6px">${scored.map(x => `<button class="sp ${F.who === x.p.name ? 'on' : ''}" style="cursor:pointer;text-align:left" data-pl="fitwho" data-n="${esc(x.p.name)}"><span><b>${esc(x.p.name)}</b><br><span class="sub">${x.fam ? 'Knows ' + esc(clientOf(F.account)) + ' · ' + x.fam + ' delivered this year' : 'New to ' + esc(clientOf(F.account))}</span></span><span class="chip" style="${toneOf(x.sc)}">${tagOf(x.sc)}</span></button>`).join('')}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span class="lbl">Draft WBS to share</span><pre class="brief" style="white-space:pre-wrap;margin:0;font-family:inherit">${esc(draftWbsText(startD, end))}</pre>
+        <div class="row"><button class="btn ghost" data-pl="copywbs">Copy WBS</button><button class="btn primary" data-pl="fitadd" ${F.who ? '' : 'disabled title="Pick who takes it first"'}>${F.inDraft ? 'Update in this draft' : 'Pencil into this draft'}</button>${F.inDraft ? '<button class="btn ghost" data-pl="fitremove">Take out of draft</button>' : ''}</div>
+        <span class="sub">Pencilled-in work shows on the timeline with a dashed outline. Apply books it as Tentative.</span></div>
+    </div>`;
+  }
+
+  return `<div class="card" style="gap:12px;background:var(--accent-tint);border-color:#DDD0FB">
+      <div class="row between"><div class="row" style="gap:10px"><b style="font-size:16px;color:var(--accent)">Plan mode</b>${tabs}<span class="sub" id="planSaved"></span>${P0.draft.shared && P0.draft.shared.length ? `<span class="chip" style="background:#DBEAFE;color:#1E3A8A">Shared with ${esc(P0.draft.shared.join(', '))}</span>` : ''}${P0.draft.author && P0.draft.author !== d.meTeam ? `<span class="chip" style="background:#F3F4F6;color:#374151">From ${esc(P0.draft.author)}</span>` : ''}</div>
+        <div class="row" style="gap:8px"><span class="chip" style="${overN ? 'background:#FEE2E2;color:#7F1D1D' : 'background:#DCFCE7;color:#14532D'}">${overN ? overN + (overN === 1 ? ' week over target' : ' weeks over target') : 'No one over target'}</span>
+          ${P0.drafts && P0.drafts.length > 1 ? `<select class="sel" data-plc="draft" style="width:auto" aria-label="Open a saved draft">${P0.drafts.map(x => `<option value="${esc(x.id)}" ${x.id === P0.draft.id ? 'selected' : ''}>${esc(x.name)}${x.author !== d.meTeam ? ' · ' + esc(x.author) : ''}</option>`).join('')}</select>` : ''}
+          <button class="btn ghost" data-pl="share">Share draft</button>
+          <button class="btn ghost" data-pl="discard">${P0.confirm === 'discard' ? 'Click again to discard' : 'Discard'}</button>
+          <button class="btn primary" data-pl="apply" ${changes.length ? '' : 'disabled'}>${P0.confirm === 'apply' ? 'Click again to apply' : 'Apply option ' + P0.cur + (changes.length ? ' (' + changes.length + ')' : '')}</button></div></div>
+      ${P0.share ? `<div class="row" style="gap:6px"><span class="lbl">Share with</span>${shareable.map(p => `<button class="pill" data-pl="shareto" data-n="${esc(p.name)}">${esc(p.name)}</button>`).join('')}<span class="sub">They'll see it on their Plan mode tab and can comment by changing it.</span></div>` : ''}
+      <span class="sub">Nudge work by a day or a week, change start or due, or change who's on it. Load and checks update as you go. Nothing changes for the team until you apply, and Basecamp is never changed.</span>
+    </div>
+    ${compare}
+    <div class="row between">${estStrip || '<span></span>'}<div class="row" style="gap:6px"><span class="lbl">Plan to</span><div class="seg">${[[0.8, '80%'], [1, '100%']].map(([v, l]) => `<button class="${target === v ? 'on' : ''}" data-pl="target" data-v="${v}">${l}</button>`).join('')}</div><span class="sub">${target < 1 ? 'Leaves a day a week for ad-hoc asks' : 'No room held for ad-hoc asks'}</span></div></div>
+    <div class="card" style="gap:12px"><div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Draft timeline</h2><span class="sub">Next 8 weeks · ${fmt(W0)} to ${fmt(W1)} · load shown against your ${Math.round(target * 100)}% target</span></div></div>
+      <div class="tl"><div style="min-width:${250 + lanesOut.nB * lanesOut.colW}px">
+        <div class="tlhead"><div style="padding:12px 16px;font-size:12px;font-weight:600;color:var(--soft)">Team · by week</div>
+          <div style="display:grid;grid-template-columns:repeat(${lanesOut.nB},minmax(0,1fr))">${lanesOut.B.map(b => `<div style="padding:12px 14px;font-size:13px;border-left:1px solid var(--line2);color:#374151"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span></div>`).join('')}</div></div>
+        ${lanesOut.laneHtml}
+      </div></div></div>
+    <div class="grid3" style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start">
+      <div class="card" style="gap:12px">${selHtml}</div>
+      <div class="card" style="gap:8px"><span class="lbl" style="color:var(--accent)">Checks</span>${checks.length ? checks.slice(0, 14).map(c => `<button class="callout ${c[0] === 'red' ? 'bad' : 'warn'}" style="text-align:left;cursor:pointer;border:0;width:100%" ${c[1] ? `data-pl="sel" data-id="${esc(c[1])}"` : ''}><b>${esc(c[2])}</b><br>${esc(c[3])}</button>`).join('') + (checks.length > 14 ? `<span class="sub">${checks.length - 14} more</span>` : '') : '<span class="sub" style="color:#047857;font-weight:700">All clear: nobody over target, reviews covered, splits set.</span>'}</div>
+      <div class="card" style="gap:8px"><span class="lbl" style="color:var(--accent)">Changes in option ${P0.cur}</span>${changes.length ? changes.map(c => `<div class="callout info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><span><b>${esc(c.title)}</b><br>${esc(c.text)}</span><button class="btn ghost" style="min-height:30px" data-pl="undo" data-id="${esc(c.id)}" ${c.added !== undefined ? `data-added="${c.added}"` : ''}>Undo</button></div>`).join('') : '<span class="sub">No changes yet. Applying writes these to the Planner and logs them in Activity.</span>'}</div>
+    </div>
+    <div class="card" style="gap:10px"><div style="display:flex;flex-direction:column;gap:2px"><h2>Will it fit?</h2><span class="sub">Try pipeline work on the plan before you commit to a WBS with the client.</span></div>${fitHtml}</div>`;
+}
+
+function planAct(el) {
+  const P0 = S.plan, a = el.dataset.pl, d = S.data, T = d.TODAY;
+  const opt = planOpt();
+  const dd = () => draftModel(opt);
+  if (a !== 'apply' && a !== 'discard') P0.confirm = '';
+  if (a === 'sel') { P0.sel = el.dataset.id; P0.blocked = ''; render(); return; }
+  if (a === 'opt') { P0.cur = el.dataset.k; render(); return; }
+  if (a === 'copyopt') { P0.draft.options.B = JSON.parse(JSON.stringify(P0.draft.options[P0.cur])); P0.cur = 'B'; planSave(); render(); return; }
+  if (a === 'dropopt') { delete P0.draft.options.B; P0.cur = 'A'; planSave(); render(); return; }
+  if (a === 'target') { P0.target = Number(el.dataset.v); render(); return; }
+  if (a === 'share') { P0.share = !P0.share; render(); return; }
+  if (a === 'shareto') {
+    const go = () => google.script.run.withSuccessHandler(list => { P0.draft.shared = list; P0.share = false; toast('Shared with ' + el.dataset.n); render(); }).withFailureHandler(err => toast('Could not share: ' + err.message)).sharePlanDraft(P0.draft.id, el.dataset.n);
+    if (P0.draft.id) go(); else google.script.run.withSuccessHandler(r => { P0.draft.id = r.id; go(); }).savePlanDraft({ id: '', name: P0.draft.name, options: P0.draft.options });
+    return;
+  }
+  if (a === 'discard') {
+    if (P0.confirm !== 'discard') { P0.confirm = 'discard'; render(); return; }
+    const id = P0.draft.id; P0.draft = planNewDraft(); P0.cur = 'A'; P0.sel = null; P0.fit = null; P0.confirm = '';
+    if (id) google.script.run.withSuccessHandler(() => { P0.drafts = (P0.drafts || []).filter(x => x.id !== id); render(); }).deletePlanDraft(id);
+    render(); toast('Draft discarded'); return;
+  }
+  if (a === 'apply') {
+    if (P0.confirm !== 'apply') { P0.confirm = 'apply'; render(); return; }
+    P0.confirm = '';
+    const m = dd(), words = planChanges(m, opt);
+    const changes = Object.keys(opt.items).map(id => { const b = d.items.find(x => x.id === id); return b ? { row: b.row, id, title: b.title, fields: opt.items[id], summary: (words.find(w => w.id === id) || {}).text || '' } : null; }).filter(Boolean);
+    const added = (opt.added || []).map(x => ({ title: x.title, account: x.account, days: x.days, due: x.due, start: x.start, people: x.people || [], likelihood: x.likelihood || 'Likely', notes: 'Pencilled in from plan mode' }));
+    el.disabled = true;
+    google.script.run.withSuccessHandler(r => { toast('Applied ' + r.applied + (r.applied === 1 ? ' change' : ' changes') + ' to the planner'); P0.draft = planNewDraft(); P0.drafts = null; P0.sel = null; P0.fit = null; load(); })
+      .withFailureHandler(err => { el.disabled = false; toast('Could not apply: ' + err.message); })
+      .applyPlan(changes, added, P0.draft.id || '');
+    return;
+  }
+  if (a === 'undo') {
+    if (el.dataset.added !== undefined) opt.added.splice(Number(el.dataset.added), 1); else delete opt.items[el.dataset.id];
+    if (P0.fit && (P0.fit.id === el.dataset.id || el.dataset.added !== undefined)) P0.fit.inDraft = false;
+    planSave(); render(); return;
+  }
+  if (a === 'est') { const m = dd(), i = m.items.find(x => x.id === el.dataset.id), v = Number(el.dataset.v); if (!i) return;
+    if (i.hasSplit) { const rows = splitRowsOf(i), tot = rows.reduce((t, r) => t + r.days, 0) || 1; rows.forEach(r => { r.days = Math.round(r.days / tot * v * 2) / 2; }); setSplitRows(i, rows); } else planChange(i.id, { est: v }); return; }
+
+  // Edits to the selected deliverable
+  const m = dd(), sel = P0.sel ? m.items.find(x => x.id === P0.sel) : null;
+  if (sel && ['move', 'start', 'due'].indexOf(a) !== -1) {
+    const n = Number(el.dataset.n);
+    if (sel.clientDate && a !== 'start') { P0.blocked = sel.title + ' has a client date (' + fmt(sel.e) + '). Unlock it to move delivery.'; render(); return; }
+    if (!sel.s || !sel.e) { toast('Give it a due date first'); return; }
+    const f = {};
+    if (a === 'move') { f.planStart = isoOf(shiftWd(sel.s, n)); f.planDue = isoOf(shiftWd(sel.e, n)); if (sel.rwS) f.planIR = isoOf(shiftWd(sel.rwS, n)); }
+    if (a === 'start') { const s2 = shiftWd(sel.s, n); if (sel.rwS && s2 >= sel.rwS) { toast('Start has to be before internal review'); return; } f.planStart = isoOf(s2); if (!sel.hasPlan) f.planDue = isoOf(sel.e); if (sel.rwS) f.planIR = isoOf(sel.rwS); }
+    if (a === 'due') { const e2 = shiftWd(sel.e, n), ir2 = sel.rwS ? shiftWd(sel.rwS, n) : null; if ((ir2 || e2) <= sel.s) { toast('Due has to stay after the start'); return; } f.planDue = isoOf(e2); if (ir2) f.planIR = isoOf(ir2); if (!sel.hasPlan) f.planStart = isoOf(sel.s); }
+    if (sel.isNew) { const k = Number(sel.id.replace('NEW-', '')) - 1, x = opt.added[k]; if (f.planStart) x.start = f.planStart; if (f.planDue) x.due = f.planDue; planSave(); render(); return; }
+    planChange(sel.id, f); return;
+  }
+  if (sel && a === 'lock') { if (sel.isNew) return; planChange(sel.id, { clientDate: !sel.clientDate }); return; }
+  if (sel && (a === 'days' || a === 'rmp' || a === 'addp')) {
+    const rows = splitRowsOf(sel);
+    if (a === 'days') { const r = rows[Number(el.dataset.k)]; r.days = Math.max(0.5, Math.round((r.days + Number(el.dataset.n)) * 2) / 2); }
+    if (a === 'rmp') rows.splice(Number(el.dataset.k), 1);
+    if (a === 'addp') rows.push({ name: el.dataset.n, days: rows.length ? 1 : (sel.handsEst || 1), win: 'all', owns: '' });
+    if (sel.isNew) { const k = Number(sel.id.replace('NEW-', '')) - 1, x = opt.added[k]; x.people = rows.map(r => r.name); x.split = splitText(rows, null); x.days = rows.reduce((t, r) => t + r.days, 0) || x.days; planSave(); render(); return; }
+    if (!rows.length) { planChange(sel.id, { split: 'oversight ' + Math.round((sel.ovCustom ? sel.ovPct : 0.25) * 100) + '%', est: sel.handsEst || '' }); return; }
+    setSplitRows(sel, rows); return;
+  }
+
+  // What-if
+  if (a === 'fitpick') { const i = d.items.find(x => x.id === el.dataset.id); if (!i) return; const s0 = i.s && i.s >= T ? i.s : (isWd(T) ? T : shiftWd(T, 1));
+    P0.fit = { id: i.id, title: i.title, account: i.account, days: i.handsEst || i.est || 1, len: i.s && i.e ? Math.max(1, wd(i.s, i.e)) : 5, start: isoOf(s0), needBy: i.e ? isoOf(i.e) : '', who: '', inDraft: !!opt.items[i.id] }; render(); return; }
+  if (a === 'fitnew') { P0.fit = { id: '', isNew: true, title: 'New project', account: d.lists.accounts[0] || 'Other', days: 4, len: 10, start: isoOf(shiftWd(T, 1)), needBy: isoOf(add(T, 35)), who: '', inDraft: false }; render(); return; }
+  const F = P0.fit;
+  if (F && a === 'fitstart') { F.start = isoOf(shiftWd(P(F.start), Number(el.dataset.n))); if (F.inDraft) fitCommit(); render(); return; }
+  if (F && a === 'fitwho') { F.who = el.dataset.n; if (F.inDraft) fitCommit(); render(); return; }
+  if (F && a === 'usebest') { F.who = el.dataset.n; F.start = el.dataset.s; if (F.inDraft) fitCommit(); render(); return; }
+  if (F && a === 'fitadd') { fitCommit(); F.inDraft = true; toast('Pencilled into option ' + P0.cur); render(); return; }
+  if (F && a === 'fitremove') { if (F.isNew) { opt.added.splice(F.addedIdx, 1); } else delete opt.items[F.id]; F.inDraft = false; planSave(); render(); return; }
+  if (F && a === 'copywbs') { const t = draftWbsText(P(F.start), nthWd(P(F.start), Math.max(1, F.len))); try { navigator.clipboard.writeText(t).then(() => toast('WBS copied'), () => toast('Select the WBS and copy it')); } catch (e) { toast('Select the WBS and copy it'); } return; }
+}
+// Puts the what-if choice into the draft: a tentative item gets the person and dates; something new becomes a booking
+function fitCommit() {
+  const F = S.plan.fit, opt = planOpt(); if (!F || !F.who) return;
+  const s0 = P(F.start), e0 = nthWd(s0, Math.max(1, F.len));
+  if (F.isNew) {
+    const x = { title: F.title, account: F.account, days: Number(F.days) || 1, start: isoOf(s0), due: isoOf(e0), people: [F.who], split: F.who + ' ' + (Number(F.days) || 1), likelihood: 'Likely' };
+    if (F.inDraft && F.addedIdx !== undefined) opt.added[F.addedIdx] = x; else { opt.added.push(x); F.addedIdx = opt.added.length - 1; }
+  } else opt.items[F.id] = Object.assign({}, opt.items[F.id] || {}, { split: F.who + ' ' + (Number(F.days) || 1), planStart: isoOf(s0), planDue: isoOf(e0), planIR: '' });
+  planSave();
+}
+document.addEventListener('click', e => { const el = e.target.closest('[data-pl]'); if (!el || el.disabled) return; e.preventDefault(); planAct(el); });
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-plc]'); if (!el) return;
+  const P0 = S.plan, k = el.dataset.plc;
+  if (k === 'draft') { const x = (P0.drafts || []).find(y => y.id === el.value); if (x) { P0.draft = { id: x.id, name: x.name, author: x.author, shared: x.shared, options: x.options && x.options.A ? x.options : { A: newOption() } }; P0.cur = 'A'; P0.sel = null; } render(); return; }
+  if (k === 'fit') { const F = P0.fit; if (!F) return; const f = el.dataset.f; F[f] = f === 'days' || f === 'len' ? Number(el.value) || 1 : el.value; if (F.inDraft) fitCommit(); render(); return; }
+  const m = draftModel(planOpt()), sel = P0.sel ? m.items.find(x => x.id === P0.sel) : null; if (!sel || sel.isNew) return;
+  if (k === 'reviewer') { planChange(sel.id, { reviewer: el.value }); return; }
+  if (k === 'win') { const rows = splitRowsOf(sel); rows[Number(el.dataset.k)].win = el.value; setSplitRows(sel, rows); return; }
+  if (k === 'ov') { const rows = splitRowsOf(sel); planChange(sel.id, { split: splitText(rows, el.value === '' ? null : Number(el.value)) }); return; }
+});
+
 /* ===== Load ===== */
 function load() {
   google.script.run
-    .withSuccessHandler(d => { S.data = prep(d); const w = document.getElementById('who'); if (w) w.textContent = d.me ? 'Signed in as ' + d.me : ''; render();
+    .withSuccessHandler(d => { S.raw = JSON.parse(JSON.stringify(d)); S.data = prep(d); const w = document.getElementById('who'); if (w) w.textContent = d.me ? 'Signed in as ' + d.me : ''; render();
       if (!S.backupChecked) { S.backupChecked = true; const mine = (d.sync && d.sync.conns || []).find(c => c.me); if (mine && !mine.backup) google.script.run.withSuccessHandler(ok => { if (ok) mine.backup = true; }).ensureMyBackup(); } })
     .withFailureHandler(err => { document.getElementById('app').innerHTML = '<div class="loading">Could not load the planner: ' + esc(err.message) + '</div>'; })
     .getDashboardData({ lite: true });
@@ -2270,12 +2686,12 @@ try { const t0 = localStorage.getItem('kh_tab'); if (t0) S.tab = t0; } catch (e)
 load();
 // Quiet refresh every 5 minutes while the page is visible and nobody is mid-edit
 setInterval(() => {
-  if (document.visibilityState !== 'visible' || S.detail || S.adding || S.timeoff || S.feedback || S.welcome || S.bulk || S.askActual || S.dragId || S.syncing || S.book.open || S.planEdit) return;
+  if (document.visibilityState !== 'visible' || S.detail || S.adding || S.timeoff || S.feedback || S.welcome || S.bulk || S.askActual || S.dragId || S.syncing || S.book.open || S.planEdit || S.tab === 'plan') return;
   const a = document.activeElement;
   if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
   const before = S.data && S.data.activity[0] ? S.data.activity[0].at : '';
   google.script.run.withSuccessHandler(d => {
-    S.data = prep(d);
+    S.raw = JSON.parse(JSON.stringify(d)); S.data = prep(d);
     const fresh = S.data.activity.filter(x => !before || x.at > before).length;
     render();
     if (fresh && S.tab !== 'activity') toast(fresh + ' new update' + (fresh > 1 ? 's' : '') + ' in Activity');

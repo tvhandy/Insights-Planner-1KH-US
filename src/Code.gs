@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.28.3';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.10.28.4';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -2003,6 +2003,22 @@ function isSummerFriday_(x) {
 }
 
 // The dashboard's load model on the server: role split, custom splits, WBS work phases, leave cover
+// Phases from plan mode dates: KO on the start, development up to internal review, review, revisions, delivery on the due date
+const REVIEW_DAYS_ = 0.5;
+function planWbs_(s, ir, e, isWd) {
+  const add = (x, n) => new Date(x.getFullYear(), x.getMonth(), x.getDate() + n);
+  const days = []; for (let x = s; x <= e; x = add(x, 1)) if (isWd(x)) days.push(x);
+  if (days.length < 3) return null;
+  let k = ir ? days.findIndex(x => +x >= +ir) : -1;
+  if (k < 2) k = Math.max(2, Math.min(days.length - 1, Math.ceil(days.length * 0.75)));
+  const n = days.length, out = [{ label: 'INT KO', s: days[0], e: days[0], kind: 'milestone' }];
+  if (k - 1 >= 1) out.push({ label: 'Report development', s: days[1], e: days[k - 1], kind: 'work' });
+  out.push({ label: 'Internal review', s: days[k], e: days[k], kind: 'milestone' });
+  if (n - 2 >= k + 1) out.push({ label: 'Revisions', s: days[k + 1], e: days[n - 2], kind: 'work' });
+  if (n - 1 > k) out.push({ label: 'Delivery', s: days[n - 1], e: days[n - 1], kind: 'milestone' });
+  return out;
+}
+
 // Split text: "Leana L. 4 @dev (competitive set); Tayler M. 2 @rev; oversight 10%" (same rules as the dashboard)
 function parseSplit_(text, match) {
   if (!text) return null;
@@ -2072,6 +2088,8 @@ function teamModel_(d) {
     let w = null;
     for (let k = (i.replies || []).length - 1; k >= 0 && !w; k--) w = parseWbs_(i.replies[k].text, x.e || T);
     if (!w) w = parseWbs_(i.brief, x.e || T);
+    // Plan mode dates replace the Basecamp schedule with plan phases
+    if ((i.planStart || i.planDue || i.planIR) && x.s && x.e) w = planWbs_(x.s, P(i.planIR), x.e, isWd);
     if (w && x.est) {
       const work = w.filter(st => st.kind === 'work'), days = work.reduce((t, st) => t + wd(st.s, st.e), 0);
       x.s = w[0].s; x.e = maxD(x.e || w[0].e, w.reduce((m, st) => maxD(m, st.e), w[0].e));
@@ -2132,6 +2150,12 @@ function teamModel_(d) {
         t += Math.max(0, days) * w;
       }
       inbound.forEach(c => { if (x.team.indexOf(c.from) !== -1 && c.e >= a && c.s <= b) t += pload(x, c.from, maxD(a, c.s), minD(b, c.e)) * w; });
+      // A named reviewer who isn't on it and isn't in Oversight (their reviews are part of oversight) books half a day on internal review
+      if (x.rwS && x.rwS >= a && x.rwS <= b && x.src.reviewer) {
+        let rv = match(x.src.reviewer) || x.src.reviewer;
+        const cv = covers.find(c => c.from === rv && c.s <= x.rwS && c.e >= x.rwS); if (cv) rv = cv.to;
+        if (rv === nm && !isOv(rv) && x.team.indexOf(rv) === -1) t += REVIEW_DAYS_ * w;
+      }
     });
     return t;
   };
