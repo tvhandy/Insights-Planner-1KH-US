@@ -62,7 +62,7 @@ function getDashboardData(opts) {
   // Planner: A ID … X Brief, Y Booking, Z Team on it, AA Split, AB Basecamp replies (JSON from the sync)
   const pl = ss.getSheetByName('Planner');
   const last = pl.getLastRow();
-  const rows = last < 2 ? [] : pl.getRange(2, 1, Math.max(last - 1, 1), 31).getValues();
+  const rows = last < 2 ? [] : pl.getRange(2, 1, Math.max(last - 1, 1), Math.min(pl.getMaxColumns(), 33)).getValues();
   const items = [];
   rows.forEach((r, i) => {
     if (str(r[3]) === '') return;
@@ -72,7 +72,7 @@ function getDashboardData(opts) {
       owner: str(r[8]), assigned: str(r[9]), stage: str(r[10]) || 'Not started',
       start: iso(r[11]), due: iso(r[12]), workStart: iso(r[13]),
       priority: str(r[16]) || 'Medium', link: str(r[17]), notes: str(r[18]),
-      source: str(r[19]), added: iso(r[20]), brief: str(r[23]), booking: str(r[24]) || 'Confirmed', split: str(r[26]), replies: replies_(r[27]), flag: replyFlag_(r[27]), actual: r[28] === '' || r[28] === null ? null : Number(r[28]), likelihood: str(r[29]), stageSince: iso(r[30])
+      source: str(r[19]), added: iso(r[20]), brief: str(r[23]), booking: str(r[24]) || 'Confirmed', split: str(r[26]), replies: replies_(r[27]), flag: replyFlag_(r[27]), actual: r[28] === '' || r[28] === null ? null : Number(r[28]), likelihood: str(r[29]), stageSince: iso(r[30]), clientDate: str(r[32]) === 'Yes' || r[32] === true
     });
   });
 
@@ -104,7 +104,8 @@ function getDashboardData(opts) {
   ls.getRange('D2:F30').getValues().forEach(r => { if (str(r[0])) typeRanges[str(r[0])] = [Number(r[1]) || 0, Number(r[2]) || 0]; });
   const scaleFactors = {};
   ls.getRange('H2:I4').getValues().forEach(r => { if (str(r[0])) scaleFactors[str(r[0])] = Number(r[1]) || 0; });
-  const leadRaw = Number(ls.getRange('Q2').getValue());
+  const q2 = ls.getRange('Q2').getValue();
+  const leadRaw = /%/.test(String(q2)) ? Number(String(q2).replace('%', '')) / 100 : Number(q2);
   const summerFridays = str(ls.getRange('Q5').getValue()) !== 'No';
   // Review stages book only a small revision allowance (Lists tab P7:Q11)
   const rv = ls.getRange('Q7:Q11').getValues().map(r => r[0]);
@@ -113,6 +114,11 @@ function getDashboardData(opts) {
   const review = { pct: (p => p > 1 ? p / 100 : p)(num(rv[0], 0.1)), min: num(rv[1], 0.1), max: num(rv[2], 0.5),
     stages: listOf(rv[3], 'Internal review, Client review, Revisions'), paused: listOf(rv[4], 'Blocked, On hold') };
   const leadShare = leadRaw > 0 && leadRaw <= 1 ? leadRaw : 0.75;
+  // Oversight added on top of hands-on days: Lists Q2 (an old 75% hands-on share there reads as 25%), and per account in column C
+  const ovDefault = leadRaw > 0.5 && leadRaw <= 1 ? 1 - leadRaw : leadRaw > 1 && leadRaw <= 100 ? leadRaw / 100 : leadRaw > 0 ? leadRaw : 0.25;
+  const accountOv = {};
+  const pctOf = v => { if (v === '' || v === null) return null; const n = Number(String(v).replace('%', '').trim()); return isNaN(n) ? null : /%/.test(String(v)) || n > 1 ? n / 100 : n; };
+  ls.getRange('A2:C30').getValues().forEach(r => { const a = str(r[0]), v = pctOf(r[2]); if (a && v !== null) accountOv[a] = v; });
 
   // Card notes (Notes tab: Timestamp, ID, Deliverable, Author, Note)
   const ns = ss.getSheetByName('Notes');
@@ -155,7 +161,7 @@ function getDashboardData(opts) {
   return {
     items, team, timeOff, holidays, notes, activity, connected, sync, me: displayName_(),
     lists: { accounts: col('A2:A30'), types: col('D2:D30'), scales: col('H2:H4'), stages: col('K2:K15'), typeRanges: typeRanges, scaleFactors: scaleFactors },
-    version: typeof PLANNER_VERSION === 'string' ? PLANNER_VERSION : '', leadShare: leadShare, summerFridays: summerFridays, review: review, timesheets: timesheets_(ss, iso, str),
+    version: typeof PLANNER_VERSION === 'string' ? PLANNER_VERSION : '', leadShare: leadShare, ovDefault: ovDefault, accountOv: accountOv, summerFridays: summerFridays, review: review, timesheets: timesheets_(ss, iso, str),
     today: iso(new Date()),
     sheetUrl: ss.getUrl()
   };
@@ -384,6 +390,13 @@ function setSplit(row, id, text, total) {
   return { row: r.row, id: id, split: String(text || ''), total: Number(total) || 0 };
 }
 
+// Marks the due date as a date promised to the client (Planner column AG). Plan mode won't move a locked date.
+function setClientDate(row, id, on) {
+  const r = writeCell_(row, id, 33, on ? 'Yes' : '');
+  logRow_(r.row, 'timeline', on ? 'Due date marked as a client date' : 'Client date unlocked');
+  return { row: r.row, id: id, clientDate: !!on };
+}
+
 // Hands a deliverable from someone leaving to a teammate: new split, and a new Owner when needed
 function handOver(row, id, text, total, newOwner, from, to) {
   let r = { row: row };
@@ -444,6 +457,7 @@ function writeCell_(row, id, col, value) {
       if (i === -1) throw new Error('Could not find ' + id + ' in the Planner.');
       r = i + 2;
     }
+    if (col > sheet.getMaxColumns()) sheet.insertColumnsAfter(sheet.getMaxColumns(), col - sheet.getMaxColumns());
     sheet.getRange(r, col).setValue(value);
     if (col === 11) sheet.getRange(r, 31).setValue(new Date());   // Stage since
     return { row: r, id: id, value: value };

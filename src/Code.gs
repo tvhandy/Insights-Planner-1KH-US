@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.28';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.10.29';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -44,7 +44,7 @@ const DIGEST_HOUR = 8;                            // Monday digest goes out arou
 const COL = {
   id: 1, client: 2, project: 3, deliverable: 4, type: 5, scale: 6, override: 7,
   owner: 9, assigned: 10, stage: 11, start: 12, due: 13, priority: 17, link: 18,
-  notes: 19, source: 20, added: 21, brief: 24, booking: 25, replies: 28, actual: 29, likelihood: 30, stageSince: 31, trackerLogged: 32
+  notes: 19, source: 20, added: 21, brief: 24, booking: 25, replies: 28, actual: 29, likelihood: 30, stageSince: 31, trackerLogged: 32, clientDate: 33
 };
 
 // Sets a stage and records when it changed (for "days in stage" on the Board)
@@ -2003,6 +2003,26 @@ function isSummerFriday_(x) {
 }
 
 // The dashboard's load model on the server: role split, custom splits, WBS work phases, leave cover
+// Split text: "Leana L. 4 @dev (competitive set); Tayler M. 2 @rev; oversight 10%" (same rules as the dashboard)
+function parseSplit_(text, match) {
+  if (!text) return null;
+  const out = { alloc: {}, win: {}, owns: {}, ov: null };
+  String(text).split(/[;\n]+/).forEach(part => {
+    part = part.trim(); if (!part) return;
+    let m = part.match(/^oversight\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%?$/i);
+    if (m) { out.ov = Number(m[1]) / 100; return; }
+    m = part.match(/^(.*?)[\s:=]+(\d+(?:\.\d+)?)\s*(?:d|days?)?\s*(?:@\s*([a-z+ ]+?))?\s*(?:\((.*)\))?\s*$/i);
+    if (!m) return;
+    const nm = match(m[1].trim());
+    if (!nm || !(+m[2] > 0)) return;
+    out.alloc[nm] = (out.alloc[nm] || 0) + Number(m[2]);
+    const w = String(m[3] || '').trim().toLowerCase();
+    out.win[nm] = /^dev/.test(w) ? 'dev' : /^rev/.test(w) ? 'rev' : 'all';
+    if (m[4]) out.owns[nm] = m[4].trim();
+  });
+  return Object.keys(out.alloc).length || out.ov !== null ? out : null;
+}
+
 function teamModel_(d) {
   const P = s => { if (!s) return null; const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2]); };
   const add = (x, n) => new Date(x.getFullYear(), x.getMonth(), x.getDate() + n);
@@ -2028,15 +2048,27 @@ function teamModel_(d) {
   let items = d.items.filter(i => CLOSED.indexOf(i.stage) === -1).map(i => {
     const x = { src: i, s: P(i.workStart) || P(i.start) || P(i.due), e: P(i.due), est: i.est, team: [], alloc: {} };
     [i.owner].concat(String(i.assigned).split(/,\s*/).map(match)).forEach(nm => { if (nm && x.team.indexOf(nm) === -1) x.team.push(nm); });
-    let split = null;
-    String(i.split || '').split(/[;\n]+/).forEach(part => { const m = part.trim().match(/^(.*?)[\s:=]+(\d+(?:\.\d+)?)\s*d?(?:ays?)?$/i); const nm = m && match(m[1].trim()); if (nm && +m[2] > 0) { split = split || {}; split[nm] = (split[nm] || 0) + Number(m[2]); } });
-    if (split) { x.alloc = split; Object.keys(split).forEach(nm => { if (x.team.indexOf(nm) === -1) x.team.push(nm); }); x.est = Object.keys(split).reduce((t, k) => t + split[k], 0); x.team = x.team.filter(nm => split[nm] > 0); }
-    else if (x.team.length) {
-      const hands = x.team.filter(nm => !isOv(nm)), over = x.team.filter(isOv);
-      const hs = hands.length && over.length ? d.leadShare : hands.length ? 1 : 0;
-      hands.forEach(nm => { x.alloc[nm] = x.est * hs / hands.length; });
-      over.forEach(nm => { x.alloc[nm] = x.est * (1 - hs) / over.length; });
+    // Same rules as the dashboard: the estimate is hands-on days (a Split sets them per person, with an optional
+    // window, @dev or @rev); oversight is added on top at the deliverable's, account's or default %
+    const sp = parseSplit_(i.split, match);
+    x.win = sp ? sp.win : {};
+    const accOv = (d.accountOv || {})[i.account];
+    const ovPct = sp && sp.ov !== null ? sp.ov : accOv !== undefined ? accOv : (d.ovDefault !== undefined ? d.ovDefault : 0.25);
+    let hands, overs, handsEst;
+    if (sp && Object.keys(sp.alloc).length) {
+      Object.keys(sp.alloc).forEach(nm => { if (x.team.indexOf(nm) === -1) x.team.push(nm); x.alloc[nm] = sp.alloc[nm]; });
+      hands = Object.keys(sp.alloc); handsEst = hands.reduce((t, nm) => t + sp.alloc[nm], 0);
+      overs = x.team.filter(nm => isOv(nm) && hands.indexOf(nm) === -1);
+    } else {
+      hands = x.team.filter(nm => !isOv(nm)); overs = x.team.filter(isOv);
+      if (!hands.length) { hands = overs; overs = []; }
+      handsEst = Number(x.est) || 0;
+      hands.forEach(nm => { x.alloc[nm] = handsEst / hands.length; });
     }
+    overs.forEach(nm => { x.alloc[nm] = handsEst * ovPct / overs.length; x.win[nm] = 'all'; });
+    x.est = handsEst + (overs.length ? handsEst * ovPct : 0);
+    x.team = x.team.filter(nm => x.alloc[nm] > 0);
+    x.hasWin = Object.keys(x.win).some(nm => x.win[nm] !== 'all');
     let w = null;
     for (let k = (i.replies || []).length - 1; k >= 0 && !w; k--) w = parseWbs_(i.replies[k].text, x.e || T);
     if (!w) w = parseWbs_(i.brief, x.e || T);
@@ -2046,6 +2078,13 @@ function teamModel_(d) {
       if (days) { x.work = work; x.rate = x.est / days; }
     }
     if (!x.rate) x.rate = x.s && x.e && x.est ? x.est / Math.max(1, wd(x.s, x.e)) : 0;
+    // Development runs up to internal review (from the WBS; else the last quarter of working days is review and revisions)
+    if (x.s && x.e) {
+      const ir = w ? w.find(st => /internal\s*review|\bIR\b/i.test(st.label)) : null;
+      let rs = ir ? ir.s : null;
+      if (!rs) { const n = wd(x.s, x.e), k = Math.max(1, Math.ceil(n * 0.75)); let c = 0; for (let y = x.s; y <= x.e; y = add(y, 1)) if (isWd(y) && ++c === k + 1) { rs = y; break; } }
+      if (rs && rs > x.s && rs <= x.e) { x.rwS = rs; let y = add(rs, -1); while (y > x.s && !isWd(y)) y = add(y, -1); x.devE = y; }
+    }
     // In review: only a revision allowance is left, spread from today to the due date. Paused stages book nothing.
     const RV = d.review || { pct: 0.1, min: 0.1, max: 0.5, stages: ['Internal review', 'Client review', 'Revisions'], paused: ['Blocked', 'On hold'] };
     x.paused = RV.paused.indexOf(i.stage) !== -1;
@@ -2063,6 +2102,21 @@ function teamModel_(d) {
     ? (x.revE >= a && x.revS <= b ? wd(maxD(x.revS, a), minD(x.revE, b)) * x.revAllow / Math.max(1, wd(x.revS, x.revE)) : 0)
     : x.work ? x.work.reduce((t, st) => t + (st.e >= a && st.s <= b ? wd(maxD(st.s, a), minD(st.e, b)) : 0), 0) * x.rate : (x.e >= a && x.s <= b ? wd(maxD(x.s, a), minD(x.e, b)) * x.rate : 0);
   const share = (x, nm) => x.est ? (x.alloc[nm] || 0) / x.est : 0;
+  // One person's days between a and b, honoring their window (whole project, development, or review and revisions)
+  const winOf = (x, nm) => (x.win && x.win[nm]) || 'all';
+  const pload = (x, nm, a, b) => {
+    const wn = winOf(x, nm);
+    if (x.paused) return 0;
+    if (x.revAllow !== undefined && x.hasWin) {
+      if (wn === 'dev') return 0;
+      const pool = x.team.filter(n => winOf(x, n) !== 'dev').reduce((t, n) => t + (x.alloc[n] || 0), 0);
+      return pool ? load(x, a, b) * (x.alloc[nm] || 0) / pool : 0;
+    }
+    if (wn === 'all' || !x.est) return load(x, a, b) * share(x, nm);
+    const ws = wn === 'dev' ? x.s : (x.rwS || x.s), we = wn === 'dev' ? (x.devE || x.e) : x.e;
+    if (we < a || ws > b || we < ws) return 0;
+    return (x.alloc[nm] || 0) * wd(maxD(ws, a), minD(we, b)) / Math.max(1, wd(ws, we));
+  };
   // Booked days for one person between a and b
   const LIKE = { 'Likely': 0.9, 'Maybe': 0.5, 'Long shot': 0.2 };
   const booked = (nm, a, b, opts) => {
@@ -2073,11 +2127,11 @@ function teamModel_(d) {
       const w = x.src.booking !== 'Tentative' ? 1 : opts && opts.confirmedOnly ? 0 : opts && opts.weighted ? (LIKE[x.src.likelihood] || 0.9) : 1;
       if (!w) return;
       if (x.team.indexOf(nm) !== -1) {
-        let days = load(x, a, b);
-        away.forEach(c => { if (c.e >= a && c.s <= b) days -= load(x, maxD(a, c.s), minD(b, c.e)); });
-        t += Math.max(0, days) * share(x, nm) * w;
+        let days = pload(x, nm, a, b);
+        away.forEach(c => { if (c.e >= a && c.s <= b) days -= pload(x, nm, maxD(a, c.s), minD(b, c.e)); });
+        t += Math.max(0, days) * w;
       }
-      inbound.forEach(c => { if (x.team.indexOf(c.from) !== -1 && c.e >= a && c.s <= b) t += load(x, maxD(a, c.s), minD(b, c.e)) * share(x, c.from) * w; });
+      inbound.forEach(c => { if (x.team.indexOf(c.from) !== -1 && c.e >= a && c.s <= b) t += pload(x, c.from, maxD(a, c.s), minD(b, c.e)) * w; });
     });
     return t;
   };

@@ -113,6 +113,7 @@
   .split { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
   .sp { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
   .sp.on { border-color: #D8C2FA; background: #FBF8FF; }
+  .tint .lp { position: absolute; bottom: 2px; right: 6px; font-size: 10px; font-weight: 700; color: #5F6775; }
   .sp input { width: 72px; min-height: 36px; padding: 0 8px; border: 1px solid #CBD5E1; border-radius: 8px; font: inherit; font-size: 14px; text-align: right; }
   /* Basecamp replies */
   .replies { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
@@ -275,6 +276,7 @@ const I = {
   Medium: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
   Low: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   ext: '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  lock: '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
   close: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   plus: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
 };
@@ -414,17 +416,33 @@ function wbsNow(i, T) {
   return i.wbs.find(x => x.s <= T && x.e >= T) || i.wbs.find(x => x.s > T) || null;
 }
 
-// "Pranav P. 4; Tom H. 0.5" → { 'Pranav P.': 4, 'Tom H.': 0.5 } (names matched to the Team tab)
+// Split text from the Planner, one part per person, separated by ; or new lines:
+//   "Leana L. 4 @dev (competitive set); Tayler M. 2 @rev; oversight 10%"
+// days, then an optional window (@dev = development, @rev = review and revisions), then an optional (what they own).
+// "oversight N%" sets this deliverable's oversight share. Names are matched to the Team tab.
 function parseSplit(text, matchTeam) {
   if (!text) return null;
-  const out = {};
+  const out = { alloc: {}, win: {}, owns: {}, ov: null };
   String(text).split(/[;\n]+/).forEach(part => {
-    const m = part.trim().match(/^(.*?)[\s:=]+(\d+(?:\.\d+)?)\s*d?(?:ays?)?$/i);
+    part = part.trim(); if (!part) return;
+    let m = part.match(/^oversight\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%?$/i);
+    if (m) { out.ov = Number(m[1]) / 100; return; }
+    m = part.match(/^(.*?)[\s:=]+(\d+(?:\.\d+)?)\s*(?:d|days?)?\s*(?:@\s*([a-z+ ]+?))?\s*(?:\((.*)\))?\s*$/i);
     if (!m) return;
     const name = matchTeam(m[1].trim()) || '';
-    if (name && +m[2] > 0) out[name] = (out[name] || 0) + Number(m[2]);
+    if (!name || !(+m[2] > 0)) return;
+    out.alloc[name] = (out.alloc[name] || 0) + Number(m[2]);
+    const w = String(m[3] || '').trim().toLowerCase();
+    out.win[name] = /^dev/.test(w) ? 'dev' : /^rev/.test(w) ? 'rev' : 'all';
+    if (m[4]) out.owns[name] = m[4].trim();
   });
-  return Object.keys(out).length ? out : null;
+  return Object.keys(out.alloc).length || out.ov !== null ? out : null;
+}
+// Builds split text back from the card editor
+function splitText(rows, ov) {
+  const parts = rows.filter(r => r.days > 0).map(r => r.name + ' ' + (Math.round(r.days * 100) / 100) + (r.win && r.win !== 'all' ? ' @' + r.win : '') + (r.owns ? ' (' + r.owns.replace(/[();]/g, ' ').trim() + ')' : ''));
+  if (ov !== null && ov !== undefined) parts.push('oversight ' + Math.round(ov * 100) + '%');
+  return parts.join('; ');
 }
 // A person's share of a deliverable's days (1 for the unstaffed lane)
 function shareOf(i, name) {
@@ -433,6 +451,31 @@ function shareOf(i, name) {
   return i.team.length ? 1 / i.team.length : 0;
 }
 const daysFor = (i, name) => i.est ? (i.alloc[name] || 0) : 0;
+const WIN_LABEL = { all: 'whole project', dev: 'development', rev: 'review and revisions' };
+const winOf = (i, name) => (i.win && i.win[name]) || 'all';
+// Dates a person works on a deliverable: the whole project, development (up to internal review), or review and revisions
+function winRange(i, name) {
+  const w = winOf(i, name);
+  if (w === 'dev' && i.devE) return [i.s, i.devE];
+  if (w === 'rev' && i.rwS) return [i.rwS, i.e];
+  return [i.s, i.e];
+}
+// One person's days on a deliverable between s and e, honoring their window
+function personLoad(i, name, s, e, past) {
+  if (!name) return itemLoad(i, s, e, past);
+  const w = winOf(i, name);
+  if (!past && i.paused) return 0;
+  if (!past && i.revAllow !== undefined && i.hasWin) {
+    // In review: the revision allowance goes to the people working the review and revisions
+    if (w === 'dev') return 0;
+    const pool = i.team.filter(n => winOf(i, n) !== 'dev').reduce((t, n) => t + (i.alloc[n] || 0), 0);
+    return pool ? itemLoad(i, s, e) * (i.alloc[name] || 0) / pool : 0;
+  }
+  if (w === 'all' || !i.s || !i.e || !i.est) return itemLoad(i, s, e, past) * shareOf(i, name);
+  const [a, b] = winRange(i, name);
+  if (!a || !b || b < a || e < a || s > b) return 0;
+  return (i.alloc[name] || 0) * wd(maxD(a, s), minD(b, e)) / Math.max(1, wd(a, b));
+}
 
 // "Out 12 weeks. Coverage: Tayler M." → "Tayler M." (a name on the Team tab)
 function coverFrom(note, team, self) {
@@ -469,26 +512,41 @@ function prep(d) {
     const matchTeam = n => roster.find(r => r === n) || roster.find(r => r.split(' ')[0] === n.split(' ')[0] && (r.split(' ')[1] || '').charAt(0) === (n.split(' ')[1] || '').charAt(0));
     i.team = [];
     [i.owner].concat(assigned.map(matchTeam)).forEach(n => { if (n && i.team.indexOf(n) === -1) i.team.push(n); });
-    // Days per person: a Split from the Planner wins; otherwise by project role (Team tab):
-    // hands-on people share the hands-on share (75%), anyone in Oversight shares the rest
+    // Days per person. The estimate is hands-on days: a Split from the Planner sets them per person,
+    // otherwise hands-on people share them equally. Oversight (Team tab role) is added on top:
+    // the deliverable's oversight %, else the account's (Lists column C), else the default (Lists Q2).
     const isOv = n => (d.team.find(p => p.name === n) || {}).projectRole === 'Oversight';
     i.alloc = {};
-    const split = parseSplit(i.split, matchTeam);
-    i.hasSplit = !!split;
-    if (split) {
-      Object.keys(split).forEach(n => { if (i.team.indexOf(n) === -1) i.team.push(n); });
-      i.alloc = split;
-      i.est = Object.keys(split).reduce((t, n) => t + split[n], 0);
-    } else if (i.team.length) {
-      const hands = i.team.filter(n => !isOv(n)), over = i.team.filter(isOv);
-      const hs = hands.length && over.length ? d.leadShare : hands.length ? 1 : 0;
-      hands.forEach(n => { i.alloc[n] = i.est * hs / hands.length; });
-      over.forEach(n => { i.alloc[n] = i.est * (1 - hs) / over.length; });
+    const sp = parseSplit(i.split, matchTeam);
+    i.hasSplit = !!(sp && Object.keys(sp.alloc).length);
+    i.win = sp ? sp.win : {};
+    i.owns = sp ? sp.owns : {};
+    i.ovCustom = !!(sp && sp.ov !== null);
+    const accOv = (d.accountOv || {})[i.account];
+    i.ovPct = i.ovCustom ? sp.ov : accOv !== undefined ? accOv : (d.ovDefault !== undefined ? d.ovDefault : 0.25);
+    let hands, overs;
+    if (i.hasSplit) {
+      Object.keys(sp.alloc).forEach(n => { if (i.team.indexOf(n) === -1) i.team.push(n); i.alloc[n] = sp.alloc[n]; });
+      i.handsEst = Object.keys(sp.alloc).reduce((t, n) => t + sp.alloc[n], 0);
+      hands = Object.keys(sp.alloc);
+      overs = i.team.filter(n => isOv(n) && hands.indexOf(n) === -1);
+    } else {
+      hands = i.team.filter(n => !isOv(n)); overs = i.team.filter(isOv);
+      if (!hands.length) { hands = overs; overs = []; }
+      i.handsEst = i.est || 0;
+      hands.forEach(n => { i.alloc[n] = i.handsEst / hands.length; });
     }
+    i.ovDays = overs.length ? i.handsEst * i.ovPct : 0;
+    overs.forEach(n => { i.alloc[n] = i.ovDays / overs.length; i.win[n] = 'all'; });
+    i.overs = overs;
+    i.est = i.handsEst + i.ovDays;
+    i.hasWin = Object.keys(i.win).some(n => i.win[n] !== 'all');
+    // Two or more hands-on people and nobody has set the split yet
+    i.needsSplit = !i.hasSplit && hands.length > 1;
     // Lead = the Owner if hands-on, otherwise the first hands-on person; Oversight is labeled as such
     const handsOn = i.team.filter(n => !isOv(n));
     i.lead = i.owner && !isOv(i.owner) && i.team.indexOf(i.owner) !== -1 ? i.owner : (handsOn[0] || i.owner || i.team[0] || '');
-    i.roleOf = n => isOv(n) && i.team.length > 1 ? 'oversight' : n === i.lead ? 'lead' : 'support';
+    i.roleOf = n => i.overs.indexOf(n) !== -1 ? 'oversight' : n === i.lead ? 'lead' : 'support';
     i.rate = i.s && i.e && i.est ? i.est / Math.max(1, wd(i.s, i.e)) : 0;
     // A WBS in the brief replaces the even spread: effort lands on its work phases only
     // Basecamp replies (oldest → newest). A WBS in the latest reply that has one beats the brief's.
@@ -521,6 +579,16 @@ function prep(d) {
       if (i.est && days) { i.wbsWork = work; i.rate = i.est / days; }
       else i.rate = i.est ? i.est / Math.max(1, wd(i.s, i.e)) : 0;
     }
+    // Development runs up to internal review; review and revisions from it to the due date.
+    // Internal review comes from the WBS; without one, the last quarter of the working days counts as review and revisions.
+    i.devE = null; i.rwS = null;
+    if (i.s && i.e) {
+      const ir = i.wbs ? i.wbs.find(x => /internal\s*review|\bIR\b/i.test(x.label)) : null;
+      let rs = ir ? ir.s : null;
+      if (!rs) { const n = wd(i.s, i.e), k = Math.max(1, Math.ceil(n * 0.75)); let c = 0; for (let x = i.s; x <= i.e; x = add(x, 1)) if (isWd(x) && ++c === k + 1) { rs = x; break; } }
+      if (rs && rs > i.s && rs <= i.e) { i.rwS = rs; let x = add(rs, -1); while (x > i.s && !isWd(x)) x = add(x, -1); i.devE = x; }
+    }
+    i.irD = i.rwS;
     // In review: only a revision allowance is left (Lists tab), spread from today to the due date. Paused stages book nothing.
     const RV = d.review || { pct: 0.1, min: 0.1, max: 0.5, stages: ['Internal review', 'Client review', 'Revisions'], paused: ['Blocked', 'On hold'] };
     i.paused = RV.paused.indexOf(i.stage) !== -1;
@@ -604,7 +672,7 @@ const onIt = (i, name) => name ? i.team.indexOf(name) !== -1 && (!i.hasSplit || 
 // What the plan booked for a past week: every item that wasn't dismissed or left in triage, spread as planned (no review or pause rules)
 function bookedFor(name, s, e) {
   return S.data.items.filter(i => i.rate && i.e >= s && i.s <= e && i.stage !== 'Dismissed' && i.stage !== 'Needs triage' && !i.tent && onIt(i, name))
-    .reduce((t, i) => t + itemLoad(i, s, e, true) * shareOf(i, name), 0);
+    .reduce((t, i) => t + personLoad(i, name, s, e, true), 0);
 }
 function loadFor(name, s, e) {
   const items = S.data.items.filter(i => i.open && i.rate && i.e >= s && i.s <= e);
@@ -614,11 +682,11 @@ function loadFor(name, s, e) {
   let t = 0;
   items.forEach(i => {
     if (onIt(i, name)) {
-      let days = itemLoad(i, s, e);
-      away.forEach(c => { days -= itemLoad(i, maxD(s, c.s), minD(e, c.e)); });
-      t += Math.max(0, days) * shareOf(i, name);
+      let days = personLoad(i, name, s, e);
+      away.forEach(c => { if (c.e >= s && c.s <= e) days -= personLoad(i, name, maxD(s, c.s), minD(e, c.e)); });
+      t += Math.max(0, days);
     }
-    inbound.forEach(c => { if (onIt(i, c.from)) t += itemLoad(i, maxD(s, c.s), minD(e, c.e)) * shareOf(i, c.from); });
+    inbound.forEach(c => { if (onIt(i, c.from)) t += personLoad(i, c.from, maxD(s, c.s), minD(e, c.e)); });
   });
   return t;
 }
@@ -966,7 +1034,8 @@ const FAQ = [
     ['Fix the client on a to-do', 'Open the card, type or pick the client under <b>Client</b> and click Save. Leave "Use for every to-do from the Basecamp project" ticked and future to-dos from that project get it too.'],
     ['Add a deliverable that isn\'t in Basecamp', '<b>Add deliverable</b> (top right). Paste a Basecamp link to pull in the title, people, dates and brief, or type it in.'],
     ['Book work that isn\'t confirmed', 'Planning › <b>Book work</b>. Pick the type and size (or days), the due date and people. You\'ll see each person\'s week before and after, and who has the most room. Set Likely, Maybe or Long shot.'],
-    ['Split days unevenly between people', 'Open the card › People & days, type each person\'s days and click Save split. Use default split undoes it.'],
+    ['Split days unevenly between people', 'Open the card › People and days. Type each person\'s hands-on days, pick when they work on it (whole project, development, or review and revisions), add what they own if it helps, and click Save split. Use default split undoes it.'],
+    ['Mark a client date', 'On the card\'s Overview, click Mark as client date next to Due. The bar\'s end shows a lock so everyone knows that date was promised to the client.'],
     ['Hand over work', 'Open the card › People & days › Hand over. It moves the person\'s days to someone else and makes them Owner if needed. Reassign the to-do in Basecamp too.'],
     ['Record how long something really took', 'When a card moves to Delivered you\'re asked for the actual days. It powers the estimate check on Forecast.'],
     ['Leave a note for the team', 'Open the card › Add note. Notes are saved with your name and show on the card and in Activity.'],
@@ -974,7 +1043,9 @@ const FAQ = [
   ]],
   ['How the numbers work', [
     ['Where do estimates come from?', 'Each deliverable Type has a day range on the Lists tab. Scale picks the low end (S), middle (M or blank) or high end (L). Override days on the Planner row beats both. Anything with no Type and no Override days counts as 0 days, so capacity reads low.'],
-    ['How are days split between people?', 'Hands-on people share 75% of a deliverable\'s days; whoever is in Oversight (the Insights Director) gets 25%. Someone alone gets 100%. A custom split on the card overrides it.'],
+    ['How are days split between people?', 'The estimate is hands-on days. Hands-on people share it equally unless the card has a split. Oversight (the Insights Director) is added on top: 25% by default, a different share per account on the Lists tab (column C, e.g. Ancestry 10%), or set for one deliverable on the card.'],
+    ['What do Development and Review and revisions mean in a split?', 'Development runs from the start up to internal review; review and revisions from internal review to the due date. Internal review comes from the WBS. Without a WBS, the last quarter of the working days counts as review and revisions.'],
+    ['What does "split not set" mean?', 'Two or more people are on it and nobody has set their days, so the estimate is split evenly for now. Open the card › People and days to set it.'],
     ['How is effort spread over time?', 'Evenly over working days from start to due date. If the to-do or a reply has a WBS (a line mentioning WBS, work back, timeline or schedule, followed by lines like <code>Report development: Oct 29 - Nov 5</code>), effort lands only on its work phases. The heading can say anything around it, like "Tentative WBS:".'],
     ['What happens when work goes into review?', 'In Internal review, Client review or Revisions, only a revision allowance stays booked: 10% of the estimate, at least 0.1 and at most 0.5 day, spread to the due date. Blocked and On hold book nothing. If the work back schedule has passed its Internal review date, it counts as in review even if the stage wasn\'t changed.'],
     ['How is available time worked out?', 'Working days × billable %, minus time off (half days count 0.5), company holidays and Summer Friday afternoons (Friday before Memorial Day to the Friday before Labor Day). Leave cover moves the absent person\'s share to whoever covers.'],
@@ -1126,7 +1197,7 @@ function overview(d, T, H, hz, x) {
   const colW = hz.gran === 'day' ? (nB === 1 ? 600 : 190) : hz.gran === 'week' ? 120 : 300;
   const usedClients = {};
   const todayStyle = T >= hz.s && T <= hz.e ? `left:${pct(bpos(T) + (hz.gran === 'day' ? 0.5 : 0.1))}%` : 'display:none';
-  const lanes = people.map(p => ({ name: p.name, p })).concat(S.owner === 'All' ? [{ name: 'To be staffed', p: null }] : []);
+  const lanes = (S.owner === 'All' ? [{ name: 'To be staffed', p: null }] : []).concat(people.map(p => ({ name: p.name, p })));
   const laneHtml = lanes.map(({ name, p }) => {
     const owner = p ? p.name : '';
     const tints = B.map((b, i) => {
@@ -1142,26 +1213,31 @@ function overview(d, T, H, hz, x) {
         : offs.length ? offs.map(o => o.type + (o.half && hz.gran === 'day' ? ' · ' + o.part : '')).join(', ') : summer ? 'Summer Friday · PM' : '';
       const off = hz.gran === 'day' && (hols.length || offs.length || summer);
       const hatch = 'repeating-linear-gradient(135deg,#EEF0F3 0 8px,#F7F8FA 8px 16px)';
-      const base = !p ? (used > 0 ? '#FFF8EB' : '#FAFAFB') : avail === 0 ? '#EEF0F3' : used > avail + 0.01 ? '#FDECEC' : used === 0 ? '#EAF7F0' : '#FFFFFF';
+      const base = !p ? (used > 0 ? '#FFF8EB' : '#FAFAFB') : avail === 0 ? '#EEF0F3' : used > avail + 0.01 ? '#FDECEC' : used >= avail * 0.85 ? '#FEF6E0' : used === 0 ? '#EAF7F0' : '#FFFFFF';
+      const pctLabel = !label && !half && p && avail > 0 && used > 0.05 ? Math.round(used / avail * 100) + '%' : !label && !p && used > 0.05 ? used.toFixed(1) + ' d' : '';
       const bg = half ? `${hatch} ${half === 'AM' ? 'left' : 'right'} top / 50% 100% no-repeat, ${base}` : off ? hatch : base;
-      return `<span class="tint" style="left:${pct(i)}%;width:${pct(1)}%;background:${bg}" ${half ? `title="${half === 'AM' ? 'Morning' : 'Afternoon'} off"` : ''}>${half ? `<span style="width:50%;${half === 'AM' ? 'margin-right:auto' : 'margin-left:auto'};text-align:center;overflow:hidden;text-overflow:ellipsis">${esc(label)}</span>` : esc(label)}</span>`;
+      return `<span class="tint" style="left:${pct(i)}%;width:${pct(1)}%;background:${bg}" ${half ? `title="${half === 'AM' ? 'Morning' : 'Afternoon'} off"` : pctLabel ? `title="${used.toFixed(1)} of ${avail.toFixed(1)} d booked"` : ''}>${half ? `<span style="width:50%;${half === 'AM' ? 'margin-right:auto' : 'margin-left:auto'};text-align:center;overflow:hidden;text-overflow:ellipsis">${esc(label)}</span>` : pctLabel ? `<span class="lp">${pctLabel}</span>` : esc(label)}</span>`;
     }).join('');
     const PR = { High: 0, Medium: 1, Low: 2 };
-    const mine = S.data.items.filter(i => i.open && (onIt(i, owner) || (owner && coverFor(i, owner, hz.s, hz.e))) && i.s && i.e && i.e >= hz.s && i.s <= hz.e)
-      .sort((a, b) => (PR[a.priority] ?? 1) - (PR[b.priority] ?? 1) || a.s - b.s);
+    // Each person's bar covers their own window (whole project, development, or review and revisions)
+    const mine = S.data.items.filter(i => i.open && (onIt(i, owner) || (owner && coverFor(i, owner, hz.s, hz.e))) && i.s && i.e)
+      .map(i => { const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e]; return { i, s: r[0], e: r[1] }; })
+      .filter(x => x.s && x.e && x.e >= hz.s && x.s <= hz.e)
+      .sort((a, b) => (PR[a.i.priority] ?? 1) - (PR[b.i.priority] ?? 1) || a.s - b.s);
     const rows = [];
-    const bars = mine.map(i => {
-      let r = rows.findIndex(row => row.every(o => o.e < i.s || o.s > i.e));
+    const bars = mine.map(({ i, s: bS, e: bE }) => {
+      let r = rows.findIndex(row => row.every(o => o.e < bS || o.s > bE));
       if (r === -1) { r = rows.length; rows.push([]); }
-      rows[r].push(i);
+      rows[r].push({ s: bS, e: bE });
+      const atDue = +bE === +i.e;
       const [c, tint] = CLIENT[i.client]; usedClients[i.client] = 1;
-      const l = bpos(maxD(i.s, hz.s)), rr = bpos(add(minD(i.e, hz.e), 1)), w = Math.max(rr - l, 0.2);
-      const cutL = i.s < hz.s, cutR = i.e > hz.e, low = i.priority === 'Low', past = i.e < T, dueToday = +i.e === +T;
+      const l = bpos(maxD(bS, hz.s)), rr = bpos(add(minD(bE, hz.e), 1)), w = Math.max(rr - l, 0.2);
+      const cutL = bS < hz.s, cutR = bE > hz.e, low = i.priority === 'Low', past = atDue && i.e < T, dueToday = atDue && +i.e === +T;
       const bg = i.tent ? `repeating-linear-gradient(45deg,${tint} 0 6px,#fff 6px 12px)` : low ? tint : c;
       const fg = i.tent || low ? c : '#fff';
       const wide = w / nB >= 0.09 || (nB <= 5 && w >= 0.6);
       const border = i.tent ? `border:1.5px dashed ${c};` : low ? `border:1px solid ${c}55;` : 'box-shadow:0 1px 3px rgba(17,24,39,.18);';
-      const flag = cutR ? '' : `<span class="flag ${past ? 'past' : ''}">${I.flag}${past ? 'Past due' : dueToday ? 'Due today' : (wide ? 'Due' : '')}</span>`;
+      const flag = cutR || !atDue ? '' : `<span class="flag ${past ? 'past' : ''}" ${i.clientDate ? 'title="Client date"' : ''}>${i.clientDate ? I.lock : I.flag}${past ? 'Past due' : dueToday ? 'Due today' : (wide ? (i.clientDate ? 'Client date' : 'Due') : '')}</span>`;
       // With a WBS: light bar, solid work phases, diamonds for milestones
       let segs = '', barBg = bg, barFg = fg;
       if (i.wbs && !i.tent) {
@@ -1177,7 +1253,7 @@ function overview(d, T, H, hz, x) {
       const nowStep = wbsNow(i, T);
       return `<button class="bar" data-open="${esc(i.id)}" title="${esc(i.title)}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${8 + r * 46}px;left:calc(${pct(l)}% + 4px);width:calc(${pct(w)}% - 8px);min-width:34px;background:${i.wbs && !i.tent ? barBg : bg};color:${i.wbs && !i.tent ? barFg : fg};${border}${past ? 'outline:2px solid var(--red);outline-offset:1px;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
         ${segs}<span class="prio" role="img" aria-label="${esc(i.priority)} priority" style="${i.tent || low || i.wbs ? `background:#fff;color:${c}` : 'background:rgba(255,255,255,.22);color:#fff'}">${I[i.priority] || I.Medium}</span>
-        ${wide ? `<span style="display:flex;flex-direction:column;min-width:0;overflow:hidden"><span class="t">${cutL ? '← ' : ''}${esc(i.title)}</span><span class="m">${esc(i.client)}${i.sub ? ' · ' + esc(i.sub) : ''} · ${nowStep && i.wbs ? (nowStep.s <= T ? 'Now: ' : 'Next: ') + esc(nowStep.label) + ' · ' : ''}${(() => { const cv = owner && !onIt(i, owner) ? coverFor(i, owner, hz.s, hz.e) : null; if (cv) return 'covering for ' + esc(cv.from) + ' from ' + fmt(cv.s); const tl = i.tlFlag ? '⚠ timeline changed · ' : ''; const away = owner && covers().find(c => c.from === owner && c.e >= i.s && c.s <= i.e); return tl + (i.paused ? esc(i.stage) + ' · nothing booked · ' : i.revAllow !== undefined ? (i.pastIR && i.stage !== 'Internal review' ? 'past internal review' : 'in review') + ' · ' + (i.revAllow * (owner && i.est ? daysFor(i, owner) / i.est : 1)).toFixed(1) + ' d left for revisions · ' : '') + (i.est ? (owner ? daysFor(i, owner) : i.est).toFixed(1) + ' of ' + i.est.toFixed(1) + ' d' : 'No estimate') + (owner && i.team.length > 1 ? ' · ' + (i.roleOf(owner) === 'support' ? 'supporting ' + esc(i.lead) : i.roleOf(owner)) : '') + (away ? ' · ' + esc(away.to) + ' covers from ' + fmt(away.s) : ''); })()}${cutR ? ' · continues →' : ''}</span></span>` : ''}
+        ${wide ? `<span style="display:flex;flex-direction:column;min-width:0;overflow:hidden"><span class="t">${cutL ? '← ' : ''}${esc(i.title)}</span><span class="m">${esc(i.client)}${i.sub ? ' · ' + esc(i.sub) : ''} · ${nowStep && i.wbs ? (nowStep.s <= T ? 'Now: ' : 'Next: ') + esc(nowStep.label) + ' · ' : ''}${(() => { const cv = owner && !onIt(i, owner) ? coverFor(i, owner, hz.s, hz.e) : null; if (cv) return 'covering for ' + esc(cv.from) + ' from ' + fmt(cv.s); const tl = i.tlFlag ? '⚠ timeline changed · ' : ''; const away = owner && covers().find(c => c.from === owner && c.e >= i.s && c.s <= i.e); return tl + (i.paused ? esc(i.stage) + ' · nothing booked · ' : i.revAllow !== undefined ? (i.pastIR && i.stage !== 'Internal review' ? 'past internal review' : 'in review') + ' · ' + (i.revAllow * (owner && i.est ? daysFor(i, owner) / i.est : 1)).toFixed(1) + ' d left for revisions · ' : '') + (i.est ? (owner ? daysFor(i, owner) : i.est).toFixed(1) + ' of ' + i.est.toFixed(1) + ' d' : 'No estimate') + (owner && i.team.length > 1 ? ' · ' + (i.roleOf(owner) === 'support' ? 'supporting ' + esc(i.lead) : i.roleOf(owner)) : '') + (owner && onIt(i, owner) && winOf(i, owner) !== 'all' ? ' · ' + WIN_LABEL[winOf(i, owner)] : '') + (i.needsSplit ? ' · split not set' : '') + (away ? ' · ' + esc(away.to) + ' covers from ' + fmt(away.s) : ''); })()}${cutR ? ' · continues →' : ''}</span></span>` : ''}
         ${flag}</button>`;
     }).join('');
     const booked = loadFor(owner, hz.s, hz.e), avail = p ? availFor(p, hz.s, hz.e) : 0;
@@ -1204,7 +1280,7 @@ function overview(d, T, H, hz, x) {
       <div class="legend">
         <b>Client</b>${Object.keys(usedClients).map(c => `<span><span class="sw" style="background:${CLIENT[c][0]}"></span>${esc(c)}</span>`).join('')}
         <b>Priority</b><span>${I.High} High</span><span>${I.Medium} Medium</span><span>${I.Low} Low</span>
-        <span style="color:#B91C1C;font-weight:600">${I.flag} Due</span><span class="flag past" style="margin:0">${I.flag}Past due</span>
+        <span style="color:#B91C1C;font-weight:600">${I.flag} Due</span><span style="color:#B91C1C;font-weight:600">${I.lock} Client date</span><span class="flag past" style="margin:0">${I.flag}Past due</span>
         <span><span class="sw" style="border:1px dashed #6B7280;background:repeating-linear-gradient(45deg,#E5E7EB 0 3px,#fff 3px 6px);width:22px;height:12px"></span>Tentative</span>
         <span><span class="sw" style="background:#FDECEC"></span>Over capacity</span>
         <span><span class="sw" style="background:repeating-linear-gradient(135deg,#DDE1E7 0 3px,#F7F8FA 3px 6px);border:1px solid #D1D5DB"></span>PTO, OOO, sick or holiday</span>
@@ -1296,10 +1372,14 @@ function bookPlan(d, f) {
   if (!est || s > e) return { s, e, est };
   const people = f.people || [];
   const isOv = n => (d.team.find(p => p.name === n) || {}).projectRole === 'Oversight';
-  const hands = people.filter(n => !isOv(n)), over = people.filter(isOv);
-  const hs = hands.length && over.length ? d.leadShare : hands.length ? 1 : 0;
-  const share = {}; hands.forEach(n => { share[n] = hs / hands.length; }); over.forEach(n => { share[n] = (1 - hs) / over.length; });
-  return { s, e, est, rate: est / Math.max(1, wd(s, e)), share };
+  let hands = people.filter(n => !isOv(n)), over = people.filter(isOv);
+  if (!hands.length) { hands = over; over = []; }
+  // Oversight is added on top of the hands-on days (account default, else the Lists default)
+  const accOv = (d.accountOv || {})[f.account];
+  const ov = over.length ? (accOv !== undefined ? accOv : (d.ovDefault !== undefined ? d.ovDefault : 0.25)) : 0;
+  const total = est * (1 + ov);
+  const share = {}; hands.forEach(n => { share[n] = 1 / (1 + ov) / hands.length; }); over.forEach(n => { share[n] = ov / (1 + ov) / over.length; });
+  return { s, e, est: total, rate: total / Math.max(1, wd(s, e)), share };
 }
 function bookPreview(d, f) {
   const T = d.TODAY, plan = bookPlan(d, f);
@@ -1314,7 +1394,7 @@ function bookPreview(d, f) {
       const a = p ? availFor(p, w.s, w.e) : 0, b = p ? loadFor(n, w.s, w.e) : 0, x = wd(maxD(plan.s, w.s), minD(plan.e, w.e)) * plan.rate * plan.share[n];
       const v0 = a ? Math.round(b / a * 100) : null, v1 = a ? Math.round((b + x) / a * 100) : null;
       return `<td style="${heat(v1)}" title="${(b + x).toFixed(1)} of ${a.toFixed(1)} d">${v1 === null ? 'Out' : v0 + '% → ' + v1 + '%'}</td>`; }).join('')}</tr>`; }).join('')}</tbody></table></div>` : '<span class="sub">Pick people to see how their weeks change.</span>';
-  return `<div class="row between"><span class="lbl">Impact: ${plan.est.toFixed(1)} days from ${dayLabel(plan.s)} to ${dayLabel(plan.e)}${who.length ? ', split by role' : ''}</span></div>
+  return `<div class="row between"><span class="lbl">Impact: ${plan.est.toFixed(1)} days from ${dayLabel(plan.s)} to ${dayLabel(plan.e)}${who.length ? ', split by role, oversight on top' : ''}</span></div>
     ${grid}
     <div class="row"><span class="lbl">Most room in that window:</span>${room.slice(0, 4).map(r => `<button class="pill ${(f.people || []).indexOf(r.p.name) !== -1 ? 'on' : ''}" data-bkadd="${esc(r.p.name)}">${esc(r.p.name)} · ${Math.max(0, r.free).toFixed(1)} d free</button>`).join('')}</div>`;
 }
@@ -1477,6 +1557,7 @@ function loadCard(i) {
 
 function cardAlerts(i, d) {
   const out = [];
+  if (i.open && i.needsSplit && i.est) out.push(['Set the split', 'warn', `${i.team.filter(n => i.overs.indexOf(n) === -1).length} people are on this, so their ${i.handsEst.toFixed(1)} d are split evenly for now. Open <b>People and days</b> to set each person's days and when they work on it.`]);
   (i.leavers || []).forEach(n => {
     const p = d.people.find(x => x.name === n);
     const opts = d.people.filter(x => x.name !== n && x.projectRole !== 'Oversight' && !(x.lastD && x.lastD < i.e));
@@ -1532,7 +1613,8 @@ function scheduleSvg(i, d) {
 function splitBar(i, d) {
   if (!i.est || !i.team.length) return '<div class="sub">No days to split yet. Set an estimate first.</div>';
   return `<div class="sbar">${i.team.filter(n => daysFor(i, n) > 0).map(n => { const v = daysFor(i, n); return `<span style="flex:${v};background:${personColor(d, n)}" title="${esc(n)}: ${v.toFixed(2)} d">${v / i.est > 0.12 ? esc(n.split(' ')[0]) + ' ' + v.toFixed(1) : ''}</span>`; }).join('')}</div>
-    <div class="legend">${i.team.map(n => `<span><span class="sw" style="background:${personColor(d, n)}"></span>${esc(n)} · ${i.roleOf(n)} · ${daysFor(i, n).toFixed(2).replace(/\.?0+$/, '')} d</span>`).join('')}</div>`;
+    <div class="legend">${i.team.map(n => `<span><span class="sw" style="background:${personColor(d, n)}"></span>${esc(n)} · ${i.roleOf(n)} · ${daysFor(i, n).toFixed(2).replace(/\.?0+$/, '')} d${winOf(i, n) !== 'all' ? ' · ' + WIN_LABEL[winOf(i, n)] : ''}${i.owns && i.owns[n] ? ' · owns ' + esc(i.owns[n]) : ''}</span>`).join('')}</div>
+    ${i.ovDays ? `<div class="sub">${i.est.toFixed(1)} d in all: ${i.handsEst.toFixed(1)} d hands-on + ${i.ovDays.toFixed(1)} d oversight (${Math.round(i.ovPct * 100)}%${i.ovCustom ? ', set for this deliverable' : ''}).</div>` : ''}`;
 }
 
 function conversation(i, d) {
@@ -1557,7 +1639,8 @@ function overviewPane(i, d) {
     ${i.project ? `<label class="sub" style="display:flex;gap:6px;align-items:center;margin-top:-6px"><input type="checkbox" id="clientAll" checked style="accent-color:var(--accent)"> Use for every to-do from the Basecamp project "${esc(i.project)}", now and later</label>` : ''}
     <dl class="facts">
       <dt>Lead</dt><dd>${esc(i.lead || '—')}${i.owner && i.owner !== i.lead ? ' <span class="sub">(Owner: ' + esc(i.owner) + ')</span>' : ''}</dd>
-      <dt>Due</dt><dd>${(i.dueBC || (!i.wbs && i.e)) ? dayLabel(i.dueBC || i.e) + (i.wbs ? ' <span class="sub">Basecamp</span>' : '') : (i.wbs ? 'Not set in Basecamp' : '—')}</dd>
+      <dt>Due</dt><dd>${(i.dueBC || (!i.wbs && i.e)) ? dayLabel(i.dueBC || i.e) + (i.wbs ? ' <span class="sub">Basecamp</span>' : '') : (i.wbs ? 'Not set in Basecamp' : '—')}
+        ${i.e ? `<button class="pill ${i.clientDate ? 'on' : ''}" style="margin-left:6px" data-act="client-date" data-id="${esc(i.id)}" aria-pressed="${i.clientDate ? 'true' : 'false'}" title="A due date promised to the client">${I.lock} ${i.clientDate ? 'Client date' : 'Mark as client date'}</button>` : ''}</dd>
       <dt>Type</dt><dd>${esc(i.type || '—')}${i.est ? ' · ' + i.est.toFixed(1) + ' d' : ''}</dd>
       <dt>In Basecamp</dt><dd>${esc(i.assigned || '—')}</dd>
       ${i.notes ? `<dt>Planner notes</dt><dd>${esc(i.notes)}</dd>` : ''}</dl>
@@ -1575,14 +1658,31 @@ function schedulePane(i, d) {
 }
 
 function peoplePane(i, d) {
-  return `<div class="row between"><span class="lbl">Days per person</span><span class="stat ${i.hasSplit ? 'ok' : 'off'}">${i.hasSplit ? 'Custom split' : 'Default · by role'}</span></div>
+  const ovPeople = d.people.filter(p => p.projectRole === 'Oversight');
+  const accOv = (d.accountOv || {})[i.account];
+  const dflt = accOv !== undefined ? accOv : (d.ovDefault !== undefined ? d.ovDefault : 0.25);
+  const ovOpts = [['', 'Default for ' + (i.account || 'this account') + ' (' + Math.round(dflt * 100) + '%)'], ['0', 'None'], ['0.05', '5%'], ['0.1', '10%'], ['0.25', '25%']];
+  const ovSel = i.ovCustom ? String(i.ovPct) : '';
+  const ovOn = i.overs && i.overs.length;
+  return `<div class="row between"><span class="lbl">Days per person</span><span class="stat ${i.hasSplit ? 'ok' : i.needsSplit ? 'warn' : 'off'}">${i.hasSplit ? 'Custom split' : i.needsSplit ? 'Split not set · even for now' : 'Default'}</span></div>
     ${splitBar(i, d)}
-    <details ${i.hasSplit ? 'open' : ''}><summary class="sub" style="cursor:pointer">Change the split</summary>
-      <div class="split" style="margin-top:8px">${d.people.filter(p => !(p.lastD && p.lastD < d.TODAY) || i.team.indexOf(p.name) !== -1).map(p => {
-        const on = i.team.indexOf(p.name) !== -1, v = on && i.est ? Math.round(daysFor(i, p.name) * 100) / 100 : '';
-        return `<label class="sp ${on ? 'on' : ''}"><span><b>${esc(p.name)}</b>${on ? ' <span class="sub">' + i.roleOf(p.name) + '</span>' : ''}</span><input type="number" min="0" step="0.25" inputmode="decimal" data-split-name="${esc(p.name)}" value="${v}" placeholder="0" aria-label="Days for ${esc(p.name)}"></label>`;
-      }).join('')}</div>
-      <div class="row" style="margin-top:8px"><button class="btn ghost" data-act="save-split" data-id="${esc(i.id)}">Save split</button>${i.hasSplit ? `<button class="btn ghost" data-act="reset-split" data-id="${esc(i.id)}">Use default split</button>` : ''}<span class="sub" id="splitTotal">Total ${i.est ? i.est.toFixed(2).replace(/\.?0+$/, '') : 0} d</span></div>
+    <details ${i.hasSplit || i.needsSplit ? 'open' : ''}><summary class="sub" style="cursor:pointer">Change the split</summary>
+      <div class="sub" style="margin-top:6px">Hands-on days for each person, and when they work on it. Oversight is added on top.</div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${d.people.filter(p => p.projectRole !== 'Oversight' && (!(p.lastD && p.lastD < d.TODAY) || i.team.indexOf(p.name) !== -1)).map(p => {
+        const on = i.team.indexOf(p.name) !== -1 && i.overs.indexOf(p.name) === -1, v = on && i.handsEst ? Math.round(daysFor(i, p.name) * 100) / 100 : '';
+        const w = on ? winOf(i, p.name) : 'all';
+        return `<div class="sp ${on ? 'on' : ''}" style="display:grid;grid-template-columns:minmax(110px,1fr) 72px minmax(178px,1.1fr) minmax(130px,1.3fr);gap:8px;align-items:center">
+          <span><b>${esc(p.name)}</b>${on ? ' <span class="sub">' + i.roleOf(p.name) + '</span>' : ''}</span>
+          <input type="number" min="0" step="0.25" inputmode="decimal" data-split-name="${esc(p.name)}" value="${v}" placeholder="0" aria-label="Days for ${esc(p.name)}">
+          <select class="sel" data-split-win="${esc(p.name)}" aria-label="When ${esc(p.name)} works on it">${[['all', 'Whole project'], ['dev', 'Development'], ['rev', 'Review and revisions']].map(o => `<option value="${o[0]}" ${o[0] === w ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+          <input type="text" class="sel" style="width:auto;text-align:left" data-split-owns="${esc(p.name)}" value="${esc((i.owns || {})[p.name] || '')}" placeholder="Owns (optional)" aria-label="What ${esc(p.name)} owns">
+        </div>`;
+      }).join('')}
+      ${ovPeople.length ? `<div class="sp" style="display:grid;grid-template-columns:minmax(110px,1fr) minmax(200px,2fr);gap:8px;align-items:center;background:#FAFAFC;border-style:dashed">
+          <span><b>${ovPeople.map(p => esc(p.name)).join(', ')} · oversight</b><br><span class="sub">${ovOn ? (i.ovDays ? i.ovDays.toFixed(1) + ' d on top of ' + i.handsEst.toFixed(1) + ' d' : 'No days yet') : 'Counts once ' + esc(ovPeople[0].name) + ' is on it in Basecamp'}</span></span>
+          <select class="sel" data-split-ov="1" aria-label="Oversight share">${ovOpts.map(o => `<option value="${o[0]}" ${o[0] === ovSel ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>
+        </div>` : ''}</div>
+      <div class="row" style="margin-top:8px"><button class="btn ghost" data-act="save-split" data-id="${esc(i.id)}">Save split</button>${i.hasSplit || i.ovCustom ? `<button class="btn ghost" data-act="reset-split" data-id="${esc(i.id)}">Use default split</button>` : ''}<span class="sub" id="splitTotal">Hands-on ${i.handsEst ? i.handsEst.toFixed(2).replace(/\.?0+$/, '') : 0} d</span></div>
     </details>`;
 }
 
@@ -1938,18 +2038,33 @@ document.addEventListener('click', e => {
       .withFailureHandler(err => { el.disabled = false; toast('Could not hand over: ' + err.message); })
       .handOver(item.row, item.id, text, total, newOwner, from, to);
   }
+  else if (el.dataset.act === 'client-date') {
+    const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
+    const on = !item.clientDate;
+    el.disabled = true;
+    google.script.run
+      .withSuccessHandler(() => { item.clientDate = on; toast(on ? 'Marked as a client date' : 'Client date unlocked'); render(); })
+      .withFailureHandler(err => { el.disabled = false; toast('Could not save: ' + err.message); })
+      .setClientDate(item.row, item.id, on);
+  }
   else if (el.dataset.act === 'save-split' || el.dataset.act === 'reset-split') {
     const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
     let text = '', total = 0;
     if (el.dataset.act === 'save-split') {
-      const parts = [...document.querySelectorAll('[data-split-name]')].map(inp => [inp.dataset.splitName, parseFloat(inp.value)]).filter(([, v]) => v > 0);
-      if (!parts.length) { toast('Enter days for at least one person'); return; }
-      text = parts.map(([n, v]) => n + ' ' + (Math.round(v * 100) / 100)).join('; ');
-      total = parts.reduce((t, [, v]) => t + v, 0);
+      const q = (attr, n) => document.querySelector('[' + attr + '="' + CSS.escape(n) + '"]');
+      const rows = [...document.querySelectorAll('[data-split-name]')].map(inp => {
+        const n = inp.dataset.splitName, w = q('data-split-win', n), o = q('data-split-owns', n);
+        return { name: n, days: parseFloat(inp.value) || 0, win: w ? w.value : 'all', owns: o ? o.value.trim() : '' };
+      }).filter(r => r.days > 0);
+      const ovEl = document.querySelector('[data-split-ov]');
+      const ov = ovEl && ovEl.value !== '' ? Number(ovEl.value) : null;
+      if (!rows.length && ov === null) { toast('Enter days for at least one person'); return; }
+      text = splitText(rows, ov);
+      total = rows.reduce((t, r) => t + r.days, 0);
     }
     el.disabled = true;
     google.script.run
-      .withSuccessHandler(() => { toast(text ? 'Split saved: ' + (Math.round(total * 100) / 100) + ' d total' : 'Back to the default split'); load(); })
+      .withSuccessHandler(() => { toast(text ? (total ? 'Split saved: ' + (Math.round(total * 100) / 100) + ' d hands-on' : 'Oversight saved') : 'Back to the default split'); load(); })
       .withFailureHandler(err => { el.disabled = false; toast('Could not save: ' + err.message); })
       .setSplit(item.row, item.id, text, total);
   }
