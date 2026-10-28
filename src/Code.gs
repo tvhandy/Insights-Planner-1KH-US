@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.26';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.10.28';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -1525,9 +1525,11 @@ const WBS_HEAD_ = /\b(?:wbs|work\s*-?\s*backs?|workbacks?|timelines?|schedules?)
 const MONTHS_ = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
 const DAYW_ = '(?:mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun)[a-z]*\\.?,?\\s*';
 const RX_NAMED_ = new RegExp('(?:' + DAYW_ + ')?([a-z]{3,9})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*(?:-|–|—|to|through|thru)\\s*(?:' + DAYW_ + ')?(?:([a-z]{3,9})\\.?\\s+)?(\\d{1,2})(?:st|nd|rd|th)?)?', 'i');
-const RX_NUM_ = /(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?(?:\s*(?:-|–|—|to)\s*(?:(\d{1,2})\/)?(\d{1,2})(?:\/\d{2,4})?)?/;
+const RX_NUM_ = new RegExp('(\\d{1,2})/(\\d{1,2})(?:/\\d{2,4})?(?:\\s*(?:-|–|—|to|through|thru)\\s*(?:' + DAYW_ + ')?(?:(\\d{1,2})/)?(\\d{1,2})(?:/\\d{2,4})?)?', 'i'); // "11/6—Monday, 11/9"
 const WORK_RX_ = /develop|draft|build|analy|revis|edit|final|prep|writ|pull|data|design|updat|production|creat|research|setup|set up/i;
 const MS_RX_ = /\bko\b|kick\s*-?\s*off|review|present|deliver|\bdue\b|\bsend\b|\bshare\b|approv|meeting|\bcall\b|launch|go\s*live/i;
+// Single-day steps that mark a hand-off are milestones even if they also say "final" or "report" ("Final report shared: 11/9")
+const MS_STRONG_ = /\b(?:ko|kick\s*-?\s*off|shar(?:e|ed|ing)|sen[dt]|sending|deliver(?:ed|y|s)?|due|present(?:ed|ation|s)?|launch(?:es|ed)?|go(?:es)?\s*live)\b/i;
 function nearYear_(m, day, anchor) {
   let best = null;
   [-1, 0, 1].forEach(k => { const c = new Date(anchor.getFullYear() + k, m, day); if (!best || Math.abs(c - anchor) < Math.abs(best - anchor)) best = c; });
@@ -1567,7 +1569,7 @@ function wbsSteps_(lines, from, anchor) {
     misses = 0;
     const label = raw.slice(0, c).trim();
     const span = Math.round((when.e - when.s) / 864e5);
-    const kind = WORK_RX_.test(label) ? 'work' : MS_RX_.test(label) ? 'milestone' : span > 0 ? 'work' : 'milestone';
+    const kind = span === 0 && MS_STRONG_.test(label) ? 'milestone' : WORK_RX_.test(label) ? 'work' : MS_RX_.test(label) ? 'milestone' : span > 0 ? 'work' : 'milestone';
     steps.push({ label, s: when.s, e: when.e, kind, note: (raw.slice(c + 1).match(/\(([^)]*)\)/) || [])[1] || '' });
   }
   return steps;
@@ -1582,11 +1584,27 @@ function parseWbs_(brief, anchor) {
     const c = l.indexOf(':');
     if (c > 0 && parseWhen_(l.slice(c + 1), anchor)) continue; // "Timeline: Oct 28" is a step, not a heading
     const steps = wbsSteps_(lines, at + 1, anchor);
-    if (steps.length >= 2) return steps.sort((a, b) => a.s - b.s);
+    if (steps.length >= 2) return wbsFillGaps_(steps.sort((a, b) => a.s - b.s));
   }
   // 2) No heading: three or more "Phase: date" lines in a row still count
   const steps = wbsSteps_(lines, 0, anchor);
-  return steps.length >= 3 ? steps.sort((a, b) => a.s - b.s) : null;
+  return steps.length >= 3 ? wbsFillGaps_(steps.sort((a, b) => a.s - b.s)) : null;
+}
+// Weekdays between two steps that no step covers are work time (e.g. between "INT KO: 11/2" and "Internal review: 11/5").
+// Without this, a WBS with no development phase would book all the effort into revisions.
+function wbsFillGaps_(steps) {
+  const day = 864e5, out = [];
+  steps.forEach((st, k) => {
+    if (k) {
+      const prevEnd = steps.slice(0, k).reduce((m, z) => z.e > m ? z.e : m, steps[0].e);
+      const a = new Date(prevEnd.getFullYear(), prevEnd.getMonth(), prevEnd.getDate() + 1), b = new Date(st.s.getFullYear(), st.s.getMonth(), st.s.getDate() - 1);
+      let s0 = null, e0 = null;
+      for (let t = new Date(a); t <= b; t = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1)) if (t.getDay() % 6) { if (!s0) s0 = t; e0 = t; }
+      if (s0) out.push({ label: 'Work time (not named in the WBS)', s: s0, e: e0, kind: 'work', note: 'Gap between ' + steps[k - 1].label + ' and ' + st.label });
+    }
+    out.push(st);
+  });
+  return out;
 }
 
 const TIMELINE_WORDS_ = /\b(push(?:ed|ing)?|mov(?:e|ed|ing)\s+(?:to|up|back|out)|shift(?:ed|ing)?|delay(?:ed|s)?|extend(?:ed)?|reschedul\w*|postpon\w*|bump(?:ed)?|new\s+(?:due\s+)?date|due\s+date|deadline|timeline|timing)\b/i;
