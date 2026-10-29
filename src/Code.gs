@@ -2175,6 +2175,7 @@ function teamModel_(d) {
       if (carry > 1e-6) {
         const ds = [];
         for (let y = maxD(first || x.s, T); y <= end; y = add(y, 1)) { const cv = coverOn(nm, y), w = cv && !onX(cv) ? cv : nm; if (dayCap(w, y) > 0) ds.push([y, w]); }
+        if (!ds.length) for (let y = maxD(first || x.s, T); y <= end; y = add(y, 1)) if (isWd(y)) ds.push([y, nm]);
         ds.forEach(([y, w]) => put(w, y, carry / ds.length));
       }
       x.schedFor.push(nm);

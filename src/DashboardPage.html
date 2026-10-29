@@ -753,6 +753,8 @@ function schedule(d) {
       if (carry > 0.05) i.overflow[n] = Math.round(carry * 10) / 10;
       const ds = [];
       for (let x = maxD(first || i.s, T); x <= end; x = add(x, 1)) { const cv = coverOn(n, x), w = cv && !onIt(i, cv) ? cv : n; if (byName[w] && dayCap(byName[w], x) > 0) ds.push([x, w]); }
+      // Nobody's in (e.g. they've left): keep it on their lane so it shows as booked while they're out
+      if (!ds.length) for (let x = maxD(first || i.s, T); x <= end; x = add(x, 1)) if (isWd(x)) ds.push([x, n]);
       ds.forEach(([x, w]) => put(w, x, carry / ds.length));
     }
     i.schedFor.push(n);
