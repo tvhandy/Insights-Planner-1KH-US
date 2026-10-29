@@ -1073,6 +1073,7 @@ const FAQ = [
     ['Add a deliverable that isn\'t in Basecamp', '<b>Add deliverable</b> (top right). Paste a Basecamp link to pull in the title, people, dates and brief, or type it in.'],
     ['Book work that isn\'t confirmed', 'Planning › <b>Book work</b>. Pick the type and size (or days), the due date and people. You\'ll see each person\'s week before and after, and who has the most room. Set Likely, Maybe or Long shot.'],
     ['Split days unevenly between people', 'Open the card › People and days. Type each person\'s hands-on days, pick when they work on it (whole project, development, or review and revisions), add what they own if it helps, and click Save split. Use default split undoes it.'],
+    ['Export the timeline', 'Click Export to Google Sheet on the Team timeline (or in Plan mode for a draft). It creates a new Sheet in your Drive with a day-by-day Timeline, Load by week and a Projects list, and opens it in a new tab.'],
     ['Plan the next few weeks', 'Open Plan mode (tab, or the button on the Team timeline). Click a bar, then move it a day or a week, change its start or due date, or change who\'s on it and how many days. Load and Checks update as you go. Nothing changes for the team until you click Apply.'],
     ['Compare two plans', 'In Plan mode, click Copy as option B, change B, and the compare table shows which option has fewer weeks over target, a lower peak, fewer review conflicts and less unstaffed work. Apply the one you want.'],
     ['Share a plan for input', 'Plan mode › Share draft › pick a teammate. Drafts save to the Plan drafts tab in the Sheet, so they can open it from their own Plan mode tab and change it.'],
@@ -1219,6 +1220,42 @@ function render() {
   document.getElementById('app').innerHTML = h;
   if (S.tab === 'plan') planStatus();
   renderLayer();
+}
+
+// What the timeline shows, as plain data for the Sheet export
+function exportPayload(dd, hz, target, title) {
+  return withData(dd, () => {
+    const T = dd.TODAY, days = [], weeks = [];
+    for (let x = hz.s; x <= hz.e; x = add(x, 1)) if (isWeekday(x)) days.push(isoOf(x));
+    for (let w = monday(hz.s); w <= hz.e; w = add(w, 7)) weeks.push({ label: 'Wk of ' + fmt(w), s: maxD(w, hz.s), e: minD(add(w, 4), hz.e) });
+    const SOLIDS = ['In progress', 'Internal review', 'Client review', 'Revisions'];
+    const rows = [], load = [];
+    const lanes = [{ name: 'To be staffed', p: null }].concat(dd.people.map(p => ({ name: p.name, p })));
+    lanes.forEach(({ name, p }) => {
+      const owner = p ? p.name : '';
+      dd.items.filter(i => i.open && (onIt(i, owner) || (owner && coverFor(i, owner, hz.s, hz.e))) && i.s && i.e).forEach(i => {
+        const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e];
+        if (!r[0] || !r[1] || r[1] < hz.s || r[0] > hz.e) return;
+        const ov = !!owner && i.overs.indexOf(owner) !== -1 && i.team.length > 1;
+        const [c, tint] = CLIENT[i.client] || CLIENT.Other;
+        const marks = {};
+        if (i.wbs) i.wbs.filter(x => x.kind !== 'work').forEach(x => { if (x.s >= r[0] && x.s <= r[1]) marks[isoOf(x.s)] = /internal\s*review/i.test(x.label) ? 'IR' : /ko|kick/i.test(x.label) ? 'KO' : '◆'; });
+        if (+r[1] === +i.e) marks[isoOf(i.e)] = i.clientDate ? 'Due 🔒' : 'Due';
+        rows.push({ person: name, title: i.title + (ov ? ' (oversight)' : ''), client: i.client + (i.sub ? ' · ' + i.sub : ''), color: ov ? '#4B5563' : c, tint: ov ? '#EEF0F3' : tint,
+          solid: !ov && !i.tent && SOLIDS.indexOf(i.stage) !== -1, tent: i.tent, days: Math.round((owner && i.est ? daysFor(i, owner) : (i.handsEst || i.est || 0)) * 10) / 10,
+          from: isoOf(maxD(r[0], hz.s)), to: isoOf(minD(r[1], hz.e)), window: owner && winOf(i, owner) !== 'all' ? WIN_LABEL[winOf(i, owner)] : '', stage: i.stage, marks });
+      });
+      if (p) load.push({ person: name, cells: weeks.map(w => { const a = availFor(p, w.s, w.e); return { used: loadFor(owner, w.s, w.e), avail: a, cap: a * target }; }) });
+    });
+    return { title, days, weeks, rows, load, target };
+  });
+}
+function exportTimeline(dd, hz, target, title, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+  const w = window.open('', '_blank');
+  google.script.run.withSuccessHandler(r => { if (btn) { btn.disabled = false; btn.textContent = 'Export to Google Sheet'; } if (w) w.location = r.url; else toast('Export ready: ' + r.name); toast('Exported to ' + r.name); })
+    .withFailureHandler(err => { if (w) w.close(); if (btn) { btn.disabled = false; btn.textContent = 'Export to Google Sheet'; } toast('Could not export: ' + err.message); })
+    .exportTimeline(exportPayload(dd, hz, target, title));
 }
 
 // M T W T F under a week column (holidays in amber)
@@ -1369,7 +1406,7 @@ function overview(d, T, H, hz, x) {
 
   h += `<div class="card" style="gap:16px">
     <div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Team timeline</h2><span class="sub">${hz.label}: ${fmt(hz.s)}${hz.e > hz.s ? ' to ' + fmt(hz.e) : ''} · ${wd(hz.s, hz.e)} working days</span></div>
-      <div class="row" style="gap:10px"><div class="seg" role="group" aria-label="Time span">${Object.keys(H).map(k => `<button class="${S.horizon === k ? 'on' : ''}" data-h="${k}">${H[k].label}</button>`).join('')}</div><button class="btn primary" data-tab="plan">Plan mode</button></div></div>
+      <div class="row" style="gap:10px"><div class="seg" role="group" aria-label="Time span">${Object.keys(H).map(k => `<button class="${S.horizon === k ? 'on' : ''}" data-h="${k}">${H[k].label}</button>`).join('')}</div><button class="btn ghost" data-act="export-tl">Export to Google Sheet</button><button class="btn primary" data-tab="plan">Plan mode</button></div></div>
     <div class="row between">
       <div class="legend">
         <span><span class="sw" style="background:#2557D6;width:22px"></span>In progress</span>
@@ -2136,6 +2173,10 @@ document.addEventListener('click', e => {
       .withFailureHandler(err => { el.disabled = false; toast('Could not hand over: ' + err.message); })
       .handOver(item.row, item.id, text, total, newOwner, from, to);
   }
+  else if (el.dataset.act === 'export-tl') {
+    const H = horizons(S.data.TODAY), hz = H[S.horizon];
+    exportTimeline(S.data, hz, 1, 'Insights timeline · ' + hz.label + ' · ' + fmt(S.data.TODAY), el);
+  }
   else if (el.dataset.act === 'clear-plan') {
     const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
     el.disabled = true;
@@ -2566,7 +2607,7 @@ function planTab(d, T) {
     </div>
     ${compare}
     <div class="row between">${estStrip || '<span></span>'}<div class="row" style="gap:6px"><span class="lbl">Plan to</span><div class="seg">${[[0.8, '80%'], [1, '100%']].map(([v, l]) => `<button class="${target === v ? 'on' : ''}" data-pl="target" data-v="${v}">${l}</button>`).join('')}</div><span class="sub">${target < 1 ? 'Leaves a day a week for ad-hoc asks' : 'No room held for ad-hoc asks'}</span></div></div>
-    <div class="card" style="gap:12px"><div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Draft timeline</h2><span class="sub">Next 8 weeks · ${fmt(W0)} to ${fmt(W1)} · load shown against your ${Math.round(target * 100)}% target</span></div></div>
+    <div class="card" style="gap:12px"><div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Draft timeline</h2><span class="sub">Next 8 weeks · ${fmt(W0)} to ${fmt(W1)} · load shown against your ${Math.round(target * 100)}% target</span></div><button class="btn ghost" data-pl="export">Export to Google Sheet</button></div>
       <div class="tl"><div style="min-width:${250 + lanesOut.nB * lanesOut.colW}px">
         <div class="tlhead"><div style="padding:12px 16px;font-size:12px;font-weight:600;color:var(--soft)">Team · by week</div>
           <div style="display:grid;grid-template-columns:repeat(${lanesOut.nB},minmax(0,1fr))">${lanesOut.B.map(b => `<div style="padding:12px 14px 8px;font-size:13px;border-left:1px solid var(--line2);color:#374151"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span>${dayLetters(b)}</div>`).join('')}</div></div>
@@ -2590,6 +2631,7 @@ function planAct(el) {
   if (a === 'copyopt') { P0.draft.options.B = JSON.parse(JSON.stringify(P0.draft.options[P0.cur])); P0.cur = 'B'; planSave(); render(); return; }
   if (a === 'dropopt') { delete P0.draft.options.B; P0.cur = 'A'; planSave(); render(); return; }
   if (a === 'target') { P0.target = Number(el.dataset.v); render(); return; }
+  if (a === 'export') { const W0 = monday(T); exportTimeline(dd(), { label: 'Next 8 weeks', s: W0, e: add(W0, 7 * 8 - 3), gran: 'week' }, P0.target, 'Insights plan · ' + (P0.draft.name || 'Draft') + ' · option ' + P0.cur, el); return; }
   if (a === 'share') { P0.share = !P0.share; render(); return; }
   if (a === 'shareto') {
     const go = () => google.script.run.withSuccessHandler(list => { P0.draft.shared = list; P0.share = false; toast('Shared with ' + el.dataset.n); render(); }).withFailureHandler(err => toast('Could not share: ' + err.message)).sharePlanDraft(P0.draft.id, el.dataset.n);

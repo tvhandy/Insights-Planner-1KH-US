@@ -394,6 +394,78 @@ function setSplit(row, id, text, total) {
   return { row: r.row, id: id, split: String(text || ''), total: Number(total) || 0 };
 }
 
+// ===== Export the timeline to a new Google Sheet (in the viewer's Drive) =====
+// p: { title, days: ['yyyy-mm-dd', …], weeks: [{ label, s, e }], rows: [{ person, title, client, color, tint, solid, tent, days, from, to, window, stage, marks: { 'yyyy-mm-dd': 'KO'|'IR'|'Due' } }],
+//      load: [{ person, cells: [{ used, avail, cap }] }], target }
+function exportTimeline(p) {
+  const ss = SpreadsheetApp.create(String(p.title || 'Insights timeline').slice(0, 100));
+  const tz = ss.getSpreadsheetTimeZone();
+  const days = p.days || [], nD = days.length, FIX = 7;
+  const P = s => { const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2], 12); };
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // Timeline: one row per person per project, one column per working day
+  const tl = ss.getSheets()[0].setName('Timeline');
+  const head1 = ['', '', '', '', '', '', ''].concat(days.map(d => { const x = P(d); return x.getDay() === 1 || d === days[0] ? 'Wk of ' + Utilities.formatDate(x, tz, 'MMM d') : ''; }));
+  const head2 = ['Person', 'Deliverable', 'Client', 'Days', 'From', 'To', 'Stage · window'].concat(days.map(d => { const x = P(d); return DOW[x.getDay()].charAt(0) + ' ' + Utilities.formatDate(x, tz, 'd'); }));
+  const vals = [head1, head2], bgs = [head1.map(() => '#FFFFFF'), head2.map(() => '#F3F4F6')], fcs = [head1.map(() => '#111827'), head2.map(() => '#374151')];
+  let last = '';
+  (p.rows || []).forEach(r => {
+    const row = [r.person === last ? '' : r.person, r.title, r.client, r.days ? Number(r.days) : '', r.from ? P(r.from) : '', r.to ? P(r.to) : '', [r.stage, r.window].filter(String).join(' · ')];
+    const bg = ['#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF'], fc = ['#111827', '#111827', r.color || '#111827', '#374151', '#374151', '#374151', '#6B7280'];
+    days.forEach(d => {
+      const on = r.from && r.to && d >= r.from && d <= r.to;
+      const mk = (r.marks || {})[d] || '';
+      row.push(on ? (mk || (r.tent ? '·' : '')) : '');
+      bg.push(on ? (r.solid ? r.color : r.tint) : '#FFFFFF');
+      fc.push(on ? (r.solid ? '#FFFFFF' : r.color) : '#111827');
+    });
+    vals.push(row); bgs.push(bg); fcs.push(fc); last = r.person;
+  });
+  const rng = tl.getRange(1, 1, vals.length, FIX + nD);
+  rng.setValues(vals); rng.setBackgrounds(bgs); rng.setFontColors(fcs); rng.setFontFamily('Arial').setFontSize(10).setVerticalAlignment('middle');
+  tl.getRange(1, 1, 2, FIX + nD).setFontWeight('bold');
+  if (nD) tl.getRange(1, FIX + 1, vals.length, nD).setHorizontalAlignment('center').setFontSize(8);
+  if (vals.length > 2) { tl.getRange(3, 5, vals.length - 2, 2).setNumberFormat('mmm d'); tl.getRange(3, 1, vals.length - 2, 1).setFontWeight('bold'); }
+  tl.setFrozenRows(2); tl.setFrozenColumns(2);
+  tl.setColumnWidth(1, 120); tl.setColumnWidth(2, 260); tl.setColumnWidth(3, 120); tl.setColumnWidths(4, 3, 60); tl.setColumnWidth(7, 150);
+  if (nD) tl.setColumnWidths(FIX + 1, nD, 26);
+  // Week starts get a left border so weeks read as blocks
+  days.forEach((d, k) => { if (P(d).getDay() === 1 && k) tl.getRange(1, FIX + 1 + k, vals.length, 1).setBorder(null, true, null, null, null, null, '#9CA3AF', SpreadsheetApp.BorderStyle.SOLID); });
+
+  // Load by week
+  const ld = ss.insertSheet('Load');
+  const wk = p.weeks || [];
+  const lv = [['Person'].concat(wk.map(w => w.label))], lb = [lv[0].map(() => '#F3F4F6')];
+  (p.load || []).forEach(r => {
+    const row = [r.person], bg = ['#FFFFFF'];
+    r.cells.forEach(c => {
+      if (!c.avail) { row.push(c.used > 0.05 ? 'Out · ' + c.used.toFixed(1) + ' d' : 'Out'); bg.push(c.used > 0.05 ? '#FEE2E2' : '#F1F2F5'); return; }
+      const v = Math.round(c.used / c.cap * 100);
+      row.push(c.used.toFixed(1) + ' / ' + c.cap.toFixed(1) + ' d (' + v + '%)');
+      bg.push(v > 100 ? '#FEE2E2' : v >= 85 ? '#FEF3C7' : '#DCFCE7');
+    });
+    lv.push(row); lb.push(bg);
+  });
+  const lr = ld.getRange(1, 1, lv.length, lv[0].length);
+  lr.setValues(lv); lr.setBackgrounds(lb); lr.setFontFamily('Arial').setFontSize(10);
+  ld.getRange(1, 1, 1, lv[0].length).setFontWeight('bold'); ld.setFrozenRows(1); ld.setFrozenColumns(1);
+  ld.setColumnWidth(1, 140); if (wk.length) ld.setColumnWidths(2, wk.length, 150);
+  ld.getRange(lv.length + 2, 1).setValue('Booked days against ' + Math.round((p.target || 1) * 100) + '% of each person\'s available days. Estimates, not timesheets.').setFontColor('#6B7280');
+
+  // Flat list
+  const pj = ss.insertSheet('Projects');
+  const pv = [['Person', 'Deliverable', 'Client', 'Days', 'From', 'To', 'Stage', 'Window', 'Tentative']].concat((p.rows || []).map(r => [r.person, r.title, r.client, r.days ? Number(r.days) : '', r.from ? P(r.from) : '', r.to ? P(r.to) : '', r.stage || '', r.window || '', r.tent ? 'Yes' : '']));
+  pj.getRange(1, 1, pv.length, 9).setValues(pv);
+  pj.getRange(1, 1, 1, 9).setFontWeight('bold').setBackground('#F3F4F6');
+  if (pv.length > 1) { pj.getRange(2, 5, pv.length - 1, 2).setNumberFormat('mmm d, yyyy'); pj.getRange(1, 1, pv.length, 9).createFilter(); }
+  pj.setFrozenRows(1); pj.setColumnWidth(2, 280);
+
+  ss.setActiveSheet(tl);
+  logActivity_('settings', '', 'Timeline export', me_(), 'Exported the timeline to a new Sheet: ' + ss.getName(), ss.getUrl());
+  return { url: ss.getUrl(), name: ss.getName() };
+}
+
 // ===== Plan mode =====
 // Drafts live on the "Plan drafts" tab: ID, Name, Author, Shared with, Updated, Options (JSON)
 const PLAN_SHEET = 'Plan drafts';
