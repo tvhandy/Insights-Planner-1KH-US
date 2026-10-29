@@ -398,6 +398,7 @@ function setSplit(row, id, text, total) {
 // p: { title, days: ['yyyy-mm-dd', …], weeks: [{ label, s, e }], rows: [{ person, title, client, color, tint, solid, tent, days, from, to, window, stage, marks: { 'yyyy-mm-dd': 'KO'|'IR'|'Due' } }],
 //      load: [{ person, cells: [{ used, avail, cap }] }], target }
 function exportTimeline(p) {
+  if (typeof p === 'string') p = JSON.parse(p);
   const ss = SpreadsheetApp.create(String(p.title || 'Insights timeline').slice(0, 100));
   const tz = ss.getSpreadsheetTimeZone();
   const days = p.days || [], nD = days.length, FIX = 7;

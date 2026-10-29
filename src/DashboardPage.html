@@ -1380,7 +1380,7 @@ function exportTimeline(dd, hz, target, title, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
   const box = exportBox('<b>Exporting the timeline…</b><br><span class="sub">This takes 10–30 seconds. Keep this page open.</span>');
   const done = () => { if (btn) { btn.disabled = false; btn.textContent = 'Export to Google Sheet'; } };
-  google.script.run.withSuccessHandler(r => {
+  const run = google.script.run.withSuccessHandler(r => {
     done();
     box.innerHTML = `<b>Export ready</b><br><span class="sub">${esc(r.name)}</span><div class="row" style="margin-top:10px;gap:8px"><a class="btn primary" href="${esc(r.url)}" target="_blank" rel="noopener">Open the Google Sheet</a><button class="btn ghost" data-x>Close</button></div>`;
     box.querySelector('[data-x]').onclick = () => box.remove();
@@ -1390,7 +1390,12 @@ function exportTimeline(dd, hz, target, title, btn) {
     const auth = /authori[sz]|permission|scope/i.test(m);
     box.innerHTML = `<b>Couldn't export</b><br><span class="sub">${esc(auth ? 'Google needs your OK to create a new Sheet. In the planner Sheet, click Basecamp > Sync now, approve what it asks for, then try again.' : m)}</span><div class="row" style="margin-top:10px"><button class="btn ghost" data-x>Close</button></div>`;
     box.querySelector('[data-x]').onclick = () => box.remove();
-  }).exportTimeline(exportPayload(dd, hz, target, title));
+  });
+  // Sent as text: google.script.run refuses Date values, which left the export stuck
+  let payload;
+  try { payload = JSON.stringify(exportPayload(dd, hz, target, title)); }
+  catch (e) { done(); box.innerHTML = `<b>Couldn't export</b><br><span class="sub">${esc(e.message)}</span>`; console.error(e); return; }
+  run.exportTimeline(payload);
 }
 function exportBox(html) {
   const old = document.getElementById('export-box'); if (old) old.remove();
