@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.29.3';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.10.29.4';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -2082,6 +2082,7 @@ function teamModel_(d) {
       hands.forEach(nm => { x.alloc[nm] = handsEst / hands.length; });
     }
     overs.forEach(nm => { x.alloc[nm] = handsEst * ovPct / overs.length; x.win[nm] = 'all'; });
+    x.overs = overs;
     x.est = handsEst + (overs.length ? handsEst * ovPct : 0);
     x.team = x.team.filter(nm => x.alloc[nm] > 0);
     x.hasWin = Object.keys(x.win).some(nm => x.win[nm] !== 'all');
@@ -2115,6 +2116,71 @@ function teamModel_(d) {
   });
   const all = items.slice();
   items = items.filter(x => x.rate && x.s && x.e);
+  // Schedule (same as the dashboard): each person's remaining days go into the earliest free days of each phase,
+  // most urgent first (confirmed by due date, priority breaks ties, then tentative). Solid days; a day is only split
+  // around work already in it. Past days keep the plan's spread. Leave with a named cover: the cover works those days.
+  // Oversight stays spread, on top.
+  const SCHED = () => {
+    const free = {}, inTeam = {};
+    d.team.forEach(p => { inTeam[p.name] = p; });
+    const dayCap = (nm, x) => {
+      const p = inTeam[nm]; if (!p || !isWd(x) || (P(p.start) && x < P(p.start)) || (P(p.last) && x > P(p.last))) return 0;
+      let off = 0; d.timeOff.forEach(o => { if (o.name === nm && P(o.start) <= x && P(o.end) >= x) off += o.half ? 0.5 : 1; });
+      if (d.summerFridays && isSummerFriday_(x)) off += 0.5;
+      return Math.max(0, 1 - off);
+    };
+    const capOf = (nm, x) => { const m = free[nm] || (free[nm] = {}); if (!(+x in m)) m[+x] = dayCap(nm, x); return m[+x]; };
+    const coverOn = (nm, x) => { const c = covers.find(c => c.from === nm && c.s <= x && c.e >= x && !d.timeOff.some(o => o.name === nm && o.half && P(o.start) <= x && P(o.end) >= x)); return c && inTeam[c.to] ? c.to : ''; };
+    items.forEach(x => {
+      if (x.paused || !x.rwS || x.rwS < T || !x.src.reviewer) return;
+      let rv = match(x.src.reviewer) || x.src.reviewer;
+      const cv = covers.find(c => c.from === rv && c.s <= x.rwS && c.e >= x.rwS); if (cv) rv = cv.to;
+      if (inTeam[rv] && !isOv(rv) && x.team.indexOf(rv) === -1) { const f = capOf(rv, x.rwS); free[rv][+x.rwS] = Math.max(0, f - REVIEW_DAYS_); }
+    });
+    const PRI = { High: 0, Medium: 1, Low: 2 }, pairs = [];
+    items.forEach(x => { x.sched = null; x.schedFor = []; if (x.paused || !x.est) return; x.team.forEach(nm => { if (x.overs.indexOf(nm) === -1 && inTeam[nm]) pairs.push({ x, nm }); }); });
+    const tentOf = x => x.src.booking === 'Tentative' ? 1 : 0;
+    pairs.sort((a, b) => tentOf(a.x) - tentOf(b.x) || a.x.e - b.x.e || (PRI[a.x.src.priority] ?? 1) - (PRI[b.x.src.priority] ?? 1) || a.x.s - b.x.s);
+    pairs.forEach(({ x, nm }) => {
+      const sc = x.sched || (x.sched = {});
+      const put = (w, y, v) => { if (v <= 1e-6) return; const m = sc[w] || (sc[w] = {}); m[+y] = (m[+y] || 0) + v; };
+      const segs = x.revAllow !== undefined ? [[x.revS, x.revE]] : x.work ? x.work.map(st => [st.s, st.e]) : [[x.s, x.e]];
+      const end = x.revAllow !== undefined ? x.revE : x.e;
+      const noStart = x.revAllow === undefined && !x.work && !x.src.workStart && !x.src.start;
+      const onX = n => x.team.indexOf(n) !== -1;
+      const fill = (a, b, amt) => {
+        for (let y = a; y <= b && amt > 1e-6; y = add(y, 1)) {
+          if (!isWd(y) || y < T) continue;
+          const cv = coverOn(nm, y), w = cv && !onX(cv) ? cv : nm;
+          const f = capOf(w, y); if (f <= 1e-6) continue;
+          const v = Math.min(f, amt); free[w][+y] = f - v; put(w, y, v); amt -= v;
+        }
+        return amt;
+      };
+      let carry = 0, last = null, first = null;
+      segs.forEach(([a, b]) => {
+        let amt = carry, s0 = null, e0 = null;
+        for (let y = a; y <= b; y = add(y, 1)) {
+          if (!isWd(y)) continue;
+          const v = pload(x, nm, y, y); if (v <= 1e-9) continue;
+          if (y < T) { put(nm, y, v); continue; }
+          amt += v; if (!s0) s0 = y; e0 = y;
+        }
+        if (!s0) { carry = amt; return; }
+        if (noStart && +s0 === +e0) { let k = Math.ceil(amt - 1e-6) - 1; while (k > 0 && s0 > T) { s0 = add(s0, -1); if (isWd(s0)) k--; } }
+        if (!first) first = s0;
+        carry = fill(s0, e0, amt); last = e0;
+      });
+      if (carry > 1e-6 && last && last < end) carry = fill(add(last, 1), end, carry);
+      if (carry > 1e-6) {
+        const ds = [];
+        for (let y = maxD(first || x.s, T); y <= end; y = add(y, 1)) { const cv = coverOn(nm, y), w = cv && !onX(cv) ? cv : nm; if (dayCap(w, y) > 0) ds.push([y, w]); }
+        ds.forEach(([y, w]) => put(w, y, carry / ds.length));
+      }
+      x.schedFor.push(nm);
+    });
+  };
+  const sumSched = (m, a, b) => { let t = 0; if (m) for (const k in m) if (+k >= +a && +k <= +b) t += m[k]; return t; };
 
   const load = (x, a, b) => x.paused ? 0 : x.revAllow !== undefined
     ? (x.revE >= a && x.revS <= b ? wd(maxD(x.revS, a), minD(x.revE, b)) * x.revAllow / Math.max(1, wd(x.revS, x.revE)) : 0)
@@ -2135,6 +2201,7 @@ function teamModel_(d) {
     if (we < a || ws > b || we < ws) return 0;
     return (x.alloc[nm] || 0) * wd(maxD(ws, a), minD(we, b)) / Math.max(1, wd(ws, we));
   };
+  SCHED();
   // Booked days for one person between a and b
   const LIKE = { 'Likely': 0.9, 'Maybe': 0.5, 'Long shot': 0.2 };
   const booked = (nm, a, b, opts) => {
@@ -2144,12 +2211,14 @@ function teamModel_(d) {
       // Tentative work counts in full (same as the dashboard's Overview) unless opts.weighted or opts.confirmedOnly
       const w = x.src.booking !== 'Tentative' ? 1 : opts && opts.confirmedOnly ? 0 : opts && opts.weighted ? (LIKE[x.src.likelihood] || 0.9) : 1;
       if (!w) return;
-      if (x.team.indexOf(nm) !== -1) {
+      const sch = n => !!x.sched && x.schedFor.indexOf(n) !== -1;
+      if (x.sched && x.sched[nm]) t += sumSched(x.sched[nm], a, b) * w;
+      if (x.team.indexOf(nm) !== -1 && !sch(nm)) {
         let days = pload(x, nm, a, b);
         away.forEach(c => { if (c.e >= a && c.s <= b) days -= pload(x, nm, maxD(a, c.s), minD(b, c.e)); });
         t += Math.max(0, days) * w;
       }
-      inbound.forEach(c => { if (x.team.indexOf(c.from) !== -1 && c.e >= a && c.s <= b) t += pload(x, c.from, maxD(a, c.s), minD(b, c.e)) * w; });
+      inbound.forEach(c => { if (x.team.indexOf(c.from) !== -1 && !sch(c.from) && c.e >= a && c.s <= b) t += pload(x, c.from, maxD(a, c.s), minD(b, c.e)) * w; });
       // A named reviewer who isn't on it and isn't in Oversight (their reviews are part of oversight) books half a day on internal review
       if (x.rwS && x.rwS >= a && x.rwS <= b && x.src.reviewer) {
         let rv = match(x.src.reviewer) || x.src.reviewer;

@@ -493,8 +493,23 @@ function reviewerOf(i) {
   if (r && i.rwS) { const cv = covers().find(c => c.from === r && c.s <= i.rwS && c.e >= i.rwS); if (cv) r = cv.to; }
   return r;
 }
-// One person's days on a deliverable between s and e, honoring their window
+// One person's days on a deliverable between s and e: from the schedule (solid days, as early as possible) when there is one
 function personLoad(i, name, s, e, past) {
+  if (!past && name && i.sched && i.sched[name]) return sumSched(i.sched[name], s, e);
+  if (!past && name && i.sched && i.schedFor.indexOf(name) !== -1) return 0;
+  return spreadLoad(i, name, s, e, past);
+}
+const sumSched = (m, s, e) => { let t = 0; const a = +s, b = +e; for (const k in m) if (+k >= a && +k <= b) t += m[k]; return t; };
+// A deliverable's days between s and e across everyone on it (scheduled people plus anyone spread, like oversight)
+function itemLoadS(i, s, e) {
+  if (!i.sched) return itemLoad(i, s, e);
+  let t = 0;
+  for (const n in i.sched) t += sumSched(i.sched[n], s, e);
+  i.team.forEach(n => { if (i.schedFor.indexOf(n) === -1 && onIt(i, n)) t += spreadLoad(i, n, s, e); });
+  return t;
+}
+// The plan's even spread, honoring windows (used for oversight, past weeks, and as the shape the schedule packs)
+function spreadLoad(i, name, s, e, past) {
   if (!name) return itemLoad(i, s, e, past);
   const w = winOf(i, name);
   if (!past && i.paused) return 0;
@@ -665,7 +680,83 @@ function prep(d) {
   d.items.forEach(i => {
     i.leavers = !i.e ? [] : i.team.filter(n => { const p = d.people.find(x => x.name === n); return p && p.lastD && p.lastD < i.e && (!i.est || (i.alloc[n] || 0) > 0); });
   });
+  const prev = S.data; S.data = d;
+  try { schedule(d); } finally { S.data = prev; }
   return d;
+}
+
+/* ===== Schedule: solid days, as early as possible =====
+   Each person's remaining days on a deliverable go into the earliest free days of each phase (development, then
+   review and revisions), most urgent first: confirmed work by due date (priority breaks ties), then tentative work.
+   A day is only split when earlier work already holds part of it. Past days keep what was planned.
+   Leave with a named cover: the cover works those days. Oversight stays spread across the project, on top. */
+const SCHED_PRI = { High: 0, Medium: 1, Low: 2 };
+function schedule(d) {
+  const T = d.TODAY, byName = {}, free = {};
+  d.people.forEach(p => { byName[p.name] = p; });
+  const dayCap = (p, x) => {
+    if (!isWd(x) || (p.startD && x < p.startD) || (p.lastD && x > p.lastD)) return 0;
+    let off = 0; p.off.forEach(o => { if (o.s && o.e && o.s <= x && o.e >= x) off += o.half ? 0.5 : 1; });
+    if (isSummerFri(x)) off += 0.5;
+    return Math.max(0, 1 - off);
+  };
+  const capOf = (n, x) => { const m = free[n] || (free[n] = {}); if (!(+x in m)) m[+x] = byName[n] ? dayCap(byName[n], x) : 0; return m[+x]; };
+  const coverOn = (n, x) => { const p = byName[n]; const o = p && p.off.find(o => o.cover && !o.half && o.s <= x && o.e >= x); return o && byName[o.cover] ? o.cover : ''; };
+  d.items.forEach(i => { i.sched = null; i.schedFor = []; i.overflow = {}; });
+  // Internal review half days come off the reviewer's day first
+  d.items.forEach(i => {
+    if (!i.open || i.paused || !i.rwS || i.rwS < T) return;
+    const r = reviewerOf(i);
+    if (r && byName[r] && i.team.indexOf(r) === -1 && !isOvName(r)) { const f = capOf(r, i.rwS); free[r][+i.rwS] = Math.max(0, f - REVIEW_DAYS); }
+  });
+  const pairs = [];
+  d.items.forEach(i => {
+    if (!i.open || !i.rate || i.paused || !i.s || !i.e || !i.est) return;
+    i.team.forEach(n => { if (i.overs.indexOf(n) === -1 && onIt(i, n) && byName[n]) pairs.push({ i, n }); });
+  });
+  pairs.sort((a, b) => (a.i.tent ? 1 : 0) - (b.i.tent ? 1 : 0) || a.i.e - b.i.e || (SCHED_PRI[a.i.priority] ?? 1) - (SCHED_PRI[b.i.priority] ?? 1) || a.i.s - b.i.s);
+  pairs.forEach(({ i, n }) => {
+    const sched = i.sched || (i.sched = {});
+    const put = (w, x, v) => { if (v <= 1e-6) return; const m = sched[w] || (sched[w] = {}); m[+x] = (m[+x] || 0) + v; };
+    const segs = i.revAllow !== undefined ? [[i.revS, i.revE]] : i.wbsWork ? i.wbsWork.map(x => [x.s, x.e]) : [[i.s, i.e]];
+    const end = i.revAllow !== undefined ? i.revE : i.e;
+    const noStart = i.revAllow === undefined && !i.wbsWork && !i.workStart && !i.start;
+    const fill = (a, b, amt) => {
+      for (let x = a; x <= b && amt > 1e-6; x = add(x, 1)) {
+        if (!isWd(x) || x < T) continue;
+        const cv = coverOn(n, x), w = cv && !onIt(i, cv) ? cv : n;
+        const f = capOf(w, x); if (f <= 1e-6) continue;
+        const v = Math.min(f, amt); free[w][+x] = f - v; put(w, x, v); amt -= v;
+      }
+      return amt;
+    };
+    let carry = 0, last = null, first = null;
+    segs.forEach(([a, b]) => {
+      let amt = carry, s0 = null, e0 = null;
+      for (let x = a; x <= b; x = add(x, 1)) {
+        if (!isWd(x)) continue;
+        const v = spreadLoad(i, n, x, x);
+        if (v <= 1e-9) continue;
+        if (x < T) { put(n, x, v); continue; }
+        amt += v; if (!s0) s0 = x; e0 = x;
+      }
+      if (!s0) { carry = amt; return; }
+      // No start date (only a due date): the work runs in the days just before it's due
+      if (noStart && +s0 === +e0) { let k = Math.ceil(amt - 1e-6) - 1; while (k > 0 && s0 > T) { s0 = add(s0, -1); if (isWd(s0)) k--; } }
+      if (!first) first = s0;
+      carry = fill(s0, e0, amt); last = e0;
+    });
+    // Anything that didn't fit in its phase runs on toward the due date
+    if (carry > 1e-6 && last && last < end) carry = fill(add(last, 1), end, carry);
+    if (carry > 1e-6) {
+      // Can't fit before the due date: it stays booked across the remaining days they're in, over capacity
+      if (carry > 0.05) i.overflow[n] = Math.round(carry * 10) / 10;
+      const ds = [];
+      for (let x = maxD(first || i.s, T); x <= end; x = add(x, 1)) { const cv = coverOn(n, x), w = cv && !onIt(i, cv) ? cv : n; if (byName[w] && dayCap(byName[w], x) > 0) ds.push([x, w]); }
+      ds.forEach(([x, w]) => put(w, x, carry / ds.length));
+    }
+    i.schedFor.push(n);
+  });
 }
 const extraMap = {};
 function clientOf(a) {
@@ -717,12 +808,15 @@ function loadFor(name, s, e) {
   const away = cv.filter(c => c.from === name), inbound = cv.filter(c => c.to === name);
   let t = 0;
   items.forEach(i => {
-    if (onIt(i, name)) {
-      let days = personLoad(i, name, s, e);
-      away.forEach(c => { if (c.e >= s && c.s <= e) days -= personLoad(i, name, maxD(s, c.s), minD(e, c.e)); });
+    const sch = n => !!i.sched && i.schedFor.indexOf(n) !== -1;
+    // Scheduled work (including what this person does while covering someone)
+    if (i.sched && i.sched[name]) t += sumSched(i.sched[name], s, e);
+    if (onIt(i, name) && !sch(name)) {
+      let days = spreadLoad(i, name, s, e);
+      away.forEach(c => { if (c.e >= s && c.s <= e) days -= spreadLoad(i, name, maxD(s, c.s), minD(e, c.e)); });
       t += Math.max(0, days);
     }
-    inbound.forEach(c => { if (onIt(i, c.from)) t += personLoad(i, c.from, maxD(s, c.s), minD(e, c.e)); });
+    inbound.forEach(c => { if (onIt(i, c.from) && !sch(c.from)) t += spreadLoad(i, c.from, maxD(s, c.s), minD(e, c.e)); });
     // A named reviewer who isn't on it and isn't in Oversight books half a day on internal review
     if (i.rwS && i.rwS >= s && i.rwS <= e && reviewerOf(i) === name && i.team.indexOf(name) === -1 && !isOvName(name)) t += REVIEW_DAYS;
   });
@@ -950,8 +1044,8 @@ function forecast(d, T) {
   weeks.forEach(w => {
     w.avail = d.people.reduce((t, p) => t + availFor(p, w.s, w.e), 0);
     w.hire = hire && w.e >= hire ? wd(maxD(w.s, hire), w.e) * 0.9 : 0;
-    w.conf = open.filter(i => !i.tent).reduce((t, i) => t + itemLoad(i, w.s, w.e), 0);
-    w.tent = open.filter(i => i.tent).reduce((t, i) => t + itemLoad(i, w.s, w.e) * likeOf(i), 0);
+    w.conf = open.filter(i => !i.tent).reduce((t, i) => t + itemLoadS(i, w.s, w.e), 0);
+    w.tent = open.filter(i => i.tent).reduce((t, i) => t + itemLoadS(i, w.s, w.e) * likeOf(i), 0);
     w.need = w.conf + w.tent;
     w.gap0 = w.need - w.avail;
     w.gap = w.need - (w.avail + w.hire);
@@ -988,7 +1082,7 @@ function forecast(d, T) {
   // Days by client per month (this month and the next three)
   const months = [0, 1, 2, 3].map(k => { const s = new Date(T.getFullYear(), T.getMonth() + k, 1); return { s, e: new Date(s.getFullYear(), s.getMonth() + 1, 0), label: MON[s.getMonth()] + (s.getFullYear() !== T.getFullYear() ? ' ' + s.getFullYear() : '') }; });
   const byClient = {};
-  open.forEach(i => { const k = i.account || 'Other'; byClient[k] = byClient[k] || months.map(() => ({ c: 0, t: 0 })); months.forEach((m, j) => { const v = itemLoad(i, m.s, m.e); if (i.tent) byClient[k][j].t += v; else byClient[k][j].c += v; }); });
+  open.forEach(i => { const k = i.account || 'Other'; byClient[k] = byClient[k] || months.map(() => ({ c: 0, t: 0 })); months.forEach((m, j) => { const v = itemLoadS(i, m.s, m.e); if (i.tent) byClient[k][j].t += v; else byClient[k][j].c += v; }); });
   const clientRows = Object.keys(byClient).map(k => ({ k, v: byClient[k], tot: byClient[k].reduce((t, x) => t + x.c + x.t, 0) })).filter(r => r.tot > 0.05).sort((a, b) => b.tot - a.tot);
   const maxCell = Math.max(1, ...clientRows.flatMap(r => r.v.map(x => x.c + x.t)));
   const clients = clientRows.length ? `<div style="overflow-x:auto"><table class="t"><thead><tr><th>Account</th>${months.map(m => `<th>${m.label}</th>`).join('')}<th style="text-align:right">Total</th></tr></thead><tbody>${clientRows.map(r => `<tr><td style="white-space:nowrap"><span class="sw" style="background:${CLIENT[clientOf(r.k)][0]}"></span>${esc(r.k)}</td>${r.v.map(x => { const t = x.c + x.t; return `<td><div class="cbar"><i style="width:${t / maxCell * 100}%;background:${CLIENT[clientOf(r.k)][0]};opacity:${x.c >= x.t ? 1 : .55}"></i></div><span class="sub">${t ? t.toFixed(1) + ' d' + (x.t > 0.05 ? ' (' + x.t.toFixed(1) + ' tentative)' : '') : '—'}</span></td>`; }).join('')}<td style="text-align:right;font-weight:700">${r.tot.toFixed(1)} d</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">No estimated work in the next four months.</div>';
@@ -1094,6 +1188,7 @@ const FAQ = [
     ['What does "split not set" mean?', 'Two or more people are on it and nobody has set their days, so the estimate is split evenly for now. Open the card › People and days to set it.'],
     ['How is effort spread over time?', 'Evenly over working days from start to due date. If the to-do or a reply has a WBS (a line mentioning WBS, work back, timeline or schedule, followed by lines like <code>Report development: Oct 29 - Nov 5</code>), effort lands only on its work phases. The heading can say anything around it, like "Tentative WBS:".'],
     ['What happens when work goes into review?', 'In Internal review, Client review or Revisions, only a revision allowance stays booked: 10% of the estimate, at least 0.1 and at most 0.5 day, spread to the due date. Blocked and On hold book nothing. If the work back schedule has passed its Internal review date, it counts as in review even if the stage wasn\'t changed.'],
+    ['How are days scheduled?', 'In solid days, as early as possible. Each person\'s days on a deliverable go into their earliest free days, most urgent first: confirmed work by due date (priority breaks ties), then tentative work. With a WBS, development days stay in development and revision days start at internal review. A day is only split into half days or hours when other work already holds part of it. Something with only a due date runs in the days just before it. If the days don\'t fit before the due date, the card says how short it is. Oversight stays spread across the project, on top.'],
     ['How is available time worked out?', 'Working days × billable %, minus time off (half days count 0.5), company holidays and Summer Friday afternoons (Friday before Memorial Day to the Friday before Labor Day). Leave cover moves the absent person\'s share to whoever covers.'],
     ['What do the capacity colors mean?', 'Green: under 70% booked, has room. Amber: 70–100%, near full. Red: over 100%. Grey or "out": no available time that week. It\'s an estimate, not a timesheet.'],
     ['Why is Tentative work striped?', 'It\'s not confirmed. It counts toward capacity on the timeline; on the Forecast it\'s weighted by likelihood (Likely 90%, Maybe 50%, Long shot 20%).']
@@ -1263,7 +1358,7 @@ function exportPayload(dd, hz, target, title) {
       const parts = [];
       if (p.startD && +x === +p.startD) parts.push('First day 🎉');
       dd.items.filter(i => i.open && i.s && i.e && x >= i.s && x <= i.e && (onIt(i, p.name) || coverFor(i, p.name, x, x)) && i.overs.indexOf(p.name) === -1).forEach(i => {
-        const v = onIt(i, p.name) ? personLoad(i, p.name, x, x) : (() => { const cv = coverFor(i, p.name, x, x); return cv ? personLoad(i, cv.from, x, x) : 0; })();
+        const v = i.sched ? (i.overs.indexOf(p.name) !== -1 ? 0 : personLoad(i, p.name, x, x)) : onIt(i, p.name) ? personLoad(i, p.name, x, x) : (() => { const cv = coverFor(i, p.name, x, x); return cv ? personLoad(i, cv.from, x, x) : 0; })();
         if (v > 0.02) parts.push(label(i) + ' (' + amount(v) + ')' + (i.tent ? ' · tentative' : ''));
       });
       offs.filter(o => o.half).forEach(o => parts.push(o.type + ' ' + (o.part || 'PM')));
@@ -1719,6 +1814,8 @@ function loadCard(i) {
 
 function cardAlerts(i, d) {
   const out = [];
+  const ovf = Object.keys(i.overflow || {}).filter(n => i.overflow[n] > 0.05);
+  if (i.open && ovf.length) out.push(['Won\'t fit before the due date', 'bad', ovf.map(n => esc(n) + ' is short ' + i.overflow[n].toFixed(1) + ' d').join('; ') + '. There aren\'t enough free days before it\'s due once more urgent work and time off are booked. Move the due date, add someone, or shift other work in Plan mode.']);
   if (i.open && i.needsSplit && i.est) out.push(['Set the split', 'warn', `${i.team.filter(n => i.overs.indexOf(n) === -1).length} people are on this, so their ${i.handsEst.toFixed(1)} d are split evenly for now. Open <b>People and days</b> to set each person's days and when they work on it.`]);
   (i.leavers || []).forEach(n => {
     const p = d.people.find(x => x.name === n);
@@ -2460,6 +2557,7 @@ function planChecks(dd, target, s, e) {
       else if (i.rwS && i.reviewer && r !== i.reviewer) out.push(['amber', i.id, i.title, i.reviewer + ' is out for internal review on ' + dayLabel(i.rwS) + '. ' + r + ' reviews.']);
       if (i.rwS && wd(i.s, add(i.rwS, -1)) < 2) out.push(['amber', i.id, i.title, 'Less than two days of development before internal review.']);
       if (i.needsSplit) out.push(['amber', i.id, i.title, i.team.filter(n => i.overs.indexOf(n) === -1).length + ' people on it and no split yet. Set their days below.']);
+      Object.keys(i.overflow || {}).forEach(n => { if (i.overflow[n] > 0.05) out.push(['red', i.id, i.title, n + ' can\'t fit ' + i.overflow[n].toFixed(1) + ' d before ' + dayLabel(i.e) + '.']); });
       if (!i.handsEst && i.team.length) out.push(['amber', i.id, i.title, 'No estimate, so it books no time.']);
     });
     dd.people.forEach(p => { for (let w = s; w <= e; w = add(w, 7)) { const a = availFor(p, w, add(w, 4)), u = loadFor(p.name, w, add(w, 4)); if (a > 0 && u > a * target + 0.05) out.push(['red', '', p.name + ' · wk of ' + fmt(w), u.toFixed(1) + ' d booked against ' + (a * target).toFixed(1) + ' d (' + Math.round(target * 100) + '% target).']); } });
