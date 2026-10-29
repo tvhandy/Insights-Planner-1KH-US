@@ -1357,7 +1357,7 @@ function exportPayload(dd, hz, target, title) {
       if (full) return { text: full.type === 'Leave' ? 'Leave' + (full.cover ? ' (' + full.cover + ' covers)' : '') : full.type, kind: 'off' };
       const parts = [];
       if (p.startD && +x === +p.startD) parts.push('First day 🎉');
-      dd.items.filter(i => i.open && i.s && i.e && x >= i.s && x <= i.e && (onIt(i, p.name) || coverFor(i, p.name, x, x)) && i.overs.indexOf(p.name) === -1).forEach(i => {
+      dd.items.filter(i => i.open && i.s && i.e && (i.sched ? !!i.sched[p.name] : x >= i.s && x <= i.e && (onIt(i, p.name) || coverFor(i, p.name, x, x))) && i.overs.indexOf(p.name) === -1).forEach(i => {
         const v = i.sched ? (i.overs.indexOf(p.name) !== -1 ? 0 : personLoad(i, p.name, x, x)) : onIt(i, p.name) ? personLoad(i, p.name, x, x) : (() => { const cv = coverFor(i, p.name, x, x); return cv ? personLoad(i, cv.from, x, x) : 0; })();
         if (v > 0.02) parts.push(label(i) + ' (' + amount(v) + ')' + (i.tent ? ' · tentative' : ''));
       });
