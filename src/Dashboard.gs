@@ -640,6 +640,7 @@ function setPlanFields(row, id, f) {
   if (f.start !== undefined) { r = writeCell_(r.row, id, 12, f.start ? P(f.start) : ''); }
   if (f.due) { r = writeCell_(r.row, id, 13, P(f.due)); said.push('Dates: ' + (f.start || '…') + ' to ' + f.due); }
   if (f.likelihood) { r = writeCell_(r.row, id, 30, f.likelihood); said.push('Likelihood: ' + f.likelihood); }
+  if (f.link) { r = writeCell_(r.row, id, COL.link, String(f.link).trim()); said.push('Basecamp link added'); }
   if (said.length) logRow_(r.row, 'stage', said.join(' · '));
   return { row: r.row, id: id };
 }
