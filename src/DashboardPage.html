@@ -1376,11 +1376,27 @@ function exportPayload(dd, hz, target, title) {
   });
 }
 function exportTimeline(dd, hz, target, title, btn) {
+  // No pop-up up front (browsers and the app's own viewer show it as a blank page): the link appears here when it's ready
   if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
-  const w = window.open('', '_blank');
-  google.script.run.withSuccessHandler(r => { if (btn) { btn.disabled = false; btn.textContent = 'Export to Google Sheet'; } if (w) w.location = r.url; else toast('Export ready: ' + r.name); toast('Exported to ' + r.name); })
-    .withFailureHandler(err => { if (w) w.close(); if (btn) { btn.disabled = false; btn.textContent = 'Export to Google Sheet'; } toast('Could not export: ' + err.message); })
-    .exportTimeline(exportPayload(dd, hz, target, title));
+  const box = exportBox('<b>Exporting the timeline…</b><br><span class="sub">This takes 10–30 seconds. Keep this page open.</span>');
+  const done = () => { if (btn) { btn.disabled = false; btn.textContent = 'Export to Google Sheet'; } };
+  google.script.run.withSuccessHandler(r => {
+    done();
+    box.innerHTML = `<b>Export ready</b><br><span class="sub">${esc(r.name)}</span><div class="row" style="margin-top:10px;gap:8px"><a class="btn primary" href="${esc(r.url)}" target="_blank" rel="noopener">Open the Google Sheet</a><button class="btn ghost" data-x>Close</button></div>`;
+    box.querySelector('[data-x]').onclick = () => box.remove();
+  }).withFailureHandler(err => {
+    done();
+    const m = String(err && err.message || err);
+    const auth = /authori[sz]|permission|scope/i.test(m);
+    box.innerHTML = `<b>Couldn't export</b><br><span class="sub">${esc(auth ? 'Google needs your OK to create a new Sheet. In the planner Sheet, click Basecamp > Sync now, approve what it asks for, then try again.' : m)}</span><div class="row" style="margin-top:10px"><button class="btn ghost" data-x>Close</button></div>`;
+    box.querySelector('[data-x]').onclick = () => box.remove();
+  }).exportTimeline(exportPayload(dd, hz, target, title));
+}
+function exportBox(html) {
+  const old = document.getElementById('export-box'); if (old) old.remove();
+  const b = document.createElement('div'); b.id = 'export-box';
+  b.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:60;max-width:360px;background:#fff;border:1px solid var(--line,#E5E7EB);border-radius:12px;box-shadow:0 10px 30px rgba(17,24,39,.18);padding:16px 18px;font-size:14px;line-height:1.45';
+  b.innerHTML = html; document.body.appendChild(b); return b;
 }
 
 // M T W T F under a week column (holidays in amber)
