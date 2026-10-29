@@ -1221,6 +1221,11 @@ function render() {
   renderLayer();
 }
 
+// M T W T F under a week column (holidays in amber)
+function dayLetters(b) {
+  const ds = []; for (let x = b.s; x <= b.e; x = add(x, 1)) if (isWeekday(x)) ds.push(x);
+  return `<span style="display:grid;grid-template-columns:repeat(${ds.length},minmax(0,1fr));font-size:10px;font-weight:600;color:var(--soft);text-align:center;margin-top:6px">${ds.map(x => `<span style="${HOL[key(x)] ? 'color:#B45309;font-weight:800' : ''}" ${HOL[key(x)] ? `title="${esc(HOL[key(x)])}"` : ''}>${'SMTWTFS'[x.getDay()]}</span>`).join('')}</span>`;
+}
 function timelineLanes(d, T, hz, people, opts) {
   opts = opts || {};
   const B = bucketsFor(hz), nB = B.length;
@@ -1253,7 +1258,8 @@ function timelineLanes(d, T, hz, people, opts) {
         : offs.length ? offs.map(o => o.type + (o.half && hz.gran === 'day' ? ' · ' + o.part : '')).join(', ') : summer ? 'Summer Friday · PM' : '';
       const off = hols.length || offs.length || summer;
       const outAll = p && availFor(p, b.s, b.e) === 0 && !hols.length;
-      if (!off && !outAll) return `<span class="tint" style="left:${pct(i)}%;width:${pct(1)}%"></span>`;
+      const nd = wd(b.s, b.e) || 1;
+      if (!off && !outAll) return `<span class="tint" style="left:${pct(i)}%;width:${pct(1)}%;${hz.gran === 'week' && nd > 1 ? `background-image:linear-gradient(to right,#F3F4F6 1px,transparent 1px);background-size:calc(100% / ${nd}) 100%` : ''}"></span>`;
       const hatch = 'repeating-linear-gradient(135deg,#EEF0F3 0 6px,#FFFFFF 6px 12px)';
       const bg = half ? `${hatch} ${half === 'AM' ? 'left' : 'right'} top / 50% 100% no-repeat` : hatch;
       const lab = label || (outAll ? (p.lastD && p.lastD < b.s ? 'Left' : 'Out') : '');
@@ -1380,7 +1386,7 @@ function overview(d, T, H, hz, x) {
     </div>
     <div class="tl"><div style="min-width:${250 + nB * colW}px">
       <div class="tlhead"><div style="padding:12px 16px;font-size:12px;font-weight:600;color:var(--soft)">Team · ${hz.gran === 'day' ? 'by day' : hz.gran === 'week' ? 'by week' : 'by month'}</div>
-        <div style="display:grid;grid-template-columns:repeat(${nB},minmax(0,1fr))">${B.map(b => { const t = T >= b.s && T <= add(b.e, b.s === b.e ? 0 : 2); return `<div style="padding:12px 14px;font-size:13px;border-left:1px solid var(--line2);${t ? 'background:var(--accent-tint);color:var(--accent)' : 'color:#374151'}"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span></div>`; }).join('')}</div></div>
+        <div style="display:grid;grid-template-columns:repeat(${nB},minmax(0,1fr))">${B.map(b => { const t = T >= b.s && T <= add(b.e, b.s === b.e ? 0 : 2); return `<div style="padding:12px 14px 8px;font-size:13px;border-left:1px solid var(--line2);${t ? 'background:var(--accent-tint);color:var(--accent)' : 'color:#374151'}"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span>${hz.gran === 'week' ? dayLetters(b) : ''}</div>`; }).join('')}</div></div>
       ${laneHtml}
     </div></div>
   </div>`;
@@ -2491,7 +2497,7 @@ function planTab(d, T) {
 
   // Estimates
   const noEst = dd.items.filter(i => i.open && !i.tent && i.team.length && !i.handsEst && i.e && i.e >= T).slice(0, 6);
-  const estStrip = noEst.length ? `<div class="row" style="gap:8px"><span class="lbl" style="color:#92400E">Needs an estimate:</span>${noEst.map(i => `<span class="pill" style="cursor:default;gap:4px;padding-right:4px">${esc(i.title.length > 28 ? i.title.slice(0, 27) + '…' : i.title)}${[4, 8, 12].map((v, k) => `<button class="chip" style="border:0;cursor:pointer;background:#FEF3C7;color:#78350F" data-pl="est" data-id="${esc(i.id)}" data-v="${v}">${'SML'[k]} · ${v} d</button>`).join('')}</span>`).join('')}</div>` : '';
+  const estStrip = noEst.length ? `<div class="row" style="gap:8px"><span class="lbl" style="color:#92400E">Needs an estimate:</span>${noEst.map(i => `<span class="pill" style="cursor:default;display:inline-flex;align-items:center;gap:4px;padding:4px 4px 4px 12px">${esc(i.title.length > 28 ? i.title.slice(0, 27) + '…' : i.title)}${[4, 8, 12].map((v, k) => `<button class="chip" style="border:0;cursor:pointer;background:#FEF3C7;color:#78350F;display:inline-flex;align-items:center;min-height:26px" data-pl="est" data-id="${esc(i.id)}" data-v="${v}">${'SML'[k]} · ${v} d</button>`).join('')}</span>`).join('')}</div>` : '';
 
   // Selected deliverable
   const sel = P0.sel ? dd.items.find(i => i.id === P0.sel) : null;
@@ -2563,7 +2569,7 @@ function planTab(d, T) {
     <div class="card" style="gap:12px"><div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Draft timeline</h2><span class="sub">Next 8 weeks · ${fmt(W0)} to ${fmt(W1)} · load shown against your ${Math.round(target * 100)}% target</span></div></div>
       <div class="tl"><div style="min-width:${250 + lanesOut.nB * lanesOut.colW}px">
         <div class="tlhead"><div style="padding:12px 16px;font-size:12px;font-weight:600;color:var(--soft)">Team · by week</div>
-          <div style="display:grid;grid-template-columns:repeat(${lanesOut.nB},minmax(0,1fr))">${lanesOut.B.map(b => `<div style="padding:12px 14px;font-size:13px;border-left:1px solid var(--line2);color:#374151"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span></div>`).join('')}</div></div>
+          <div style="display:grid;grid-template-columns:repeat(${lanesOut.nB},minmax(0,1fr))">${lanesOut.B.map(b => `<div style="padding:12px 14px 8px;font-size:13px;border-left:1px solid var(--line2);color:#374151"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span>${dayLetters(b)}</div>`).join('')}</div></div>
         ${lanesOut.laneHtml}
       </div></div></div>
     <div class="grid3" style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start">
