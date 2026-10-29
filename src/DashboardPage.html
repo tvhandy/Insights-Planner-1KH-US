@@ -1073,7 +1073,7 @@ const FAQ = [
     ['Add a deliverable that isn\'t in Basecamp', '<b>Add deliverable</b> (top right). Paste a Basecamp link to pull in the title, people, dates and brief, or type it in.'],
     ['Book work that isn\'t confirmed', 'Planning › <b>Book work</b>. Pick the type and size (or days), the due date and people. You\'ll see each person\'s week before and after, and who has the most room. Set Likely, Maybe or Long shot.'],
     ['Split days unevenly between people', 'Open the card › People and days. Type each person\'s hands-on days, pick when they work on it (whole project, development, or review and revisions), add what they own if it helps, and click Save split. Use default split undoes it.'],
-    ['Export the timeline', 'Click Export to Google Sheet on the Team timeline (or in Plan mode for a draft). It creates a new Sheet in your Drive with a day-by-day Timeline, Load by week and a Projects list, and opens it in a new tab.'],
+    ['Export the timeline', 'Click Export to Google Sheet on the Team timeline (or in Plan mode for a draft). It creates a new Sheet in your Drive with a Calendar (laid out like the old planner: days across, people down, what each person is on that day), a day-by-day Timeline, Load by week and a Projects list, and opens it in a new tab.'],
     ['Plan the next few weeks', 'Open Plan mode (tab, or the button on the Team timeline). Click a bar, then move it a day or a week, change its start or due date, or change who\'s on it and how many days. Load and Checks update as you go. Nothing changes for the team until you click Apply.'],
     ['Compare two plans', 'In Plan mode, click Copy as option B, change B, and the compare table shows which option has fewer weeks over target, a lower peak, fewer review conflicts and less unstaffed work. Apply the one you want.'],
     ['Share a plan for input', 'Plan mode › Share draft › pick a teammate. Drafts save to the Plan drafts tab in the Sheet, so they can open it from their own Plan mode tab and change it.'],
@@ -1247,7 +1247,35 @@ function exportPayload(dd, hz, target, title) {
       });
       if (p) load.push({ person: name, cells: weeks.map(w => { const a = availFor(p, w.s, w.e); return { used: loadFor(owner, w.s, w.e), avail: a, cap: a * target }; }) });
     });
-    return { title, days, weeks, rows, load, target };
+    // Calendar view (like the old planner): one column per calendar day, what each person is on that day
+    const amount = v => v >= 0.85 ? 'all day' : v >= 0.4 ? '1/2 day' : Math.max(1, Math.round(v * 8)) + 'hr';
+    const label = i => { const t = i.title.replace(/\s*\(projected\)\s*$/, ''), acc = i.account || i.client || ''; const tl = t.toLowerCase(); return !acc || tl.indexOf(acc.toLowerCase()) === 0 || tl.indexOf(String(i.client || '').toLowerCase()) === 0 ? t : acc + ': ' + t; };
+    const calDays = []; for (let x = hz.s; x <= hz.e; x = add(x, 1)) calDays.push(x);
+    const calRows = dd.people.map(p => ({ name: p.name, cells: calDays.map(x => {
+      const wkend = !isWeekday(x);
+      if (wkend) return { text: '', kind: 'weekend' };
+      if (p.startD && x < p.startD) return { text: '', kind: 'off' };
+      if (p.lastD && x > p.lastD) return { text: 'Left', kind: 'off' };
+      if (HOL[key(x)]) return { text: HOL[key(x)], kind: 'off' };
+      const offs = p.off.filter(o => o.s <= x && o.e >= x);
+      const full = offs.find(o => !o.half);
+      if (full) return { text: full.type === 'Leave' ? 'Leave' + (full.cover ? ' (' + full.cover + ' covers)' : '') : full.type, kind: 'off' };
+      const parts = [];
+      if (p.startD && +x === +p.startD) parts.push('First day 🎉');
+      dd.items.filter(i => i.open && i.s && i.e && x >= i.s && x <= i.e && (onIt(i, p.name) || coverFor(i, p.name, x, x)) && i.overs.indexOf(p.name) === -1).forEach(i => {
+        const v = onIt(i, p.name) ? personLoad(i, p.name, x, x) : (() => { const cv = coverFor(i, p.name, x, x); return cv ? personLoad(i, cv.from, x, x) : 0; })();
+        if (v > 0.02) parts.push(label(i) + ' (' + amount(v) + ')' + (i.tent ? ' · tentative' : ''));
+      });
+      offs.filter(o => o.half).forEach(o => parts.push(o.type + ' ' + (o.part || 'PM')));
+      if (p.lastD && +x === +p.lastD) parts.push('Last day');
+      return { text: parts.join('; '), kind: '' };
+    }) }));
+    const dayList = fn => calDays.map(x => isWeekday(x) ? fn(x).join('; ') : '');
+    const tbc = dayList(x => dd.items.filter(i => i.open && !i.team.length && i.s && +i.s === +x).map(i => label(i) + ' (' + (i.handsEst || i.est || 0).toFixed(1) + ' d' + (i.e ? ', due ' + fmt(i.e) : '') + ')'));
+    const deadlines = dayList(x => dd.items.filter(i => i.e && +i.e === +x && i.stage !== 'Dismissed' && !i.tent).map(i => label(i) + (i.clientDate ? ' 🔒' : '') + (i.lead ? ' (' + i.lead + ')' : '')));
+    const pipeline = dayList(x => dd.items.filter(i => i.tent && i.open && i.s && +i.s === +x).map(i => label(i) + ' (' + (i.likelihood || 'Likely') + (i.e ? ', due ' + fmt(i.e) : '') + ')'));
+    const cal = { days: calDays.map(isoOf), rows: calRows, tbc, deadlines, pipeline };
+    return { title, days, weeks, rows, load, target, cal };
   });
 }
 function exportTimeline(dd, hz, target, title, btn) {

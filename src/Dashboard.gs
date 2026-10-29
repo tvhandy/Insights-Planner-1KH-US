@@ -461,7 +461,39 @@ function exportTimeline(p) {
   if (pv.length > 1) { pj.getRange(2, 5, pv.length - 1, 2).setNumberFormat('mmm d, yyyy'); pj.getRange(1, 1, pv.length, 9).createFilter(); }
   pj.setFrozenRows(1); pj.setColumnWidth(2, 280);
 
-  ss.setActiveSheet(tl);
+  // Calendar: the old planner's layout. Dates across, people down, what each person is on that day in each cell.
+  if (p.cal && p.cal.days && p.cal.days.length) {
+    const cl = ss.insertSheet('Calendar', 0);
+    const cd = p.cal.days, nC = cd.length, FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const isWkend = d => { const g = P(d).getDay(); return g === 0 || g === 6; };
+    const v = [[''].concat(cd.map(d => P(d))), [''].concat(cd.map(d => FULL[P(d).getDay()]))];
+    const bg = [['#FFFFFF'].concat(cd.map(() => '#FFFFFF')), ['#FFFFFF'].concat(cd.map(() => '#38761D'))];
+    const fc = [['#000000'].concat(cd.map(() => '#000000')), ['#000000'].concat(cd.map(() => '#FFFFFF'))];
+    p.cal.rows.forEach(r => {
+      v.push([r.name].concat(r.cells.map(c => c.text)));
+      bg.push(['#FFFFFF'].concat(r.cells.map(c => c.kind ? '#EEEEEE' : '#FFFFFF')));
+      fc.push(['#000000'].concat(r.cells.map(c => c.kind === 'off' ? '#666666' : '#000000')));
+    });
+    const band = (name, list, color, labelColor, textColor) => { v.push([name].concat(list)); bg.push([color].concat(cd.map(d => isWkend(d) ? '#EEEEEE' : color))); fc.push([labelColor].concat(cd.map(() => textColor))); };
+    band('TBC / unallocated', p.cal.tbc, '#FF0000', '#FFFFFF', '#FFFFFF');
+    band('Delivery deadlines', p.cal.deadlines, '#FCE5CD', '#000000', '#000000');
+    band('Pipeline', p.cal.pipeline, '#CFE2F3', '#000000', '#000000');
+    const all = cl.getRange(1, 1, v.length, nC + 1);
+    all.setValues(v); all.setBackgrounds(bg); all.setFontColors(fc);
+    all.setFontFamily('Poppins').setFontSize(10).setWrap(true).setVerticalAlignment('middle').setBorder(true, true, true, true, true, true, '#D9D9D9', SpreadsheetApp.BorderStyle.SOLID);
+    cl.getRange(1, 2, 1, nC).setNumberFormat('mm/dd/yyyy').setHorizontalAlignment('center');
+    cl.getRange(2, 2, 1, nC).setFontWeight('bold').setHorizontalAlignment('center');
+    cl.getRange(3, 1, v.length - 2, 1).setFontWeight('bold').setFontSize(14).setWrap(true);
+    cl.setColumnWidth(1, 160);
+    cd.forEach((d, k) => cl.setColumnWidth(k + 2, isWkend(d) ? 90 : 170));
+    cl.setRowHeights(3, v.length - 2, 64);
+    cl.setFrozenRows(2); cl.setFrozenColumns(1);
+    // Today, if it's in range, stands out
+    const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), tk = cd.indexOf(today);
+    if (tk !== -1) cl.getRange(1, tk + 2, 2, 1).setBorder(true, true, true, true, null, null, '#1C4587', SpreadsheetApp.BorderStyle.SOLID_THICK);
+  }
+
+  ss.setActiveSheet(ss.getSheetByName('Calendar') || tl);
   logActivity_('settings', '', 'Timeline export', me_(), 'Exported the timeline to a new Sheet: ' + ss.getName(), ss.getUrl());
   return { url: ss.getUrl(), name: ss.getName() };
 }
