@@ -67,6 +67,15 @@
   .bar.ovb .t { font-weight: 600; } .bar.ovb .m { font-size: 10px; }
   .bar .t { flex: none; max-width: 60%; }
   .bar .m { flex: 1; min-width: 0; }
+  .dgrid { display: grid; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; gap: 0; align-items: stretch; }
+  .dgrid .dh { font-size: 10px; font-weight: 600; color: var(--soft); text-align: center; padding: 6px 0; background: #FAFAFC; border-bottom: 1px solid var(--line2); line-height: 1.3; }
+  .dgrid .dh.now { color: var(--accent); font-weight: 800; } .dgrid .wk { border-left: 1px solid var(--line); }
+  .dgrid .dn { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; font-size: 12px; border-bottom: 1px solid var(--line2); min-width: 0; }
+  .dgrid .dn .sub { font-size: 11px; }
+  .dc { margin: 4px 1px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; min-height: 22px; position: relative; }
+  .dc.on { background: var(--accent); color: #fff; } .dc.past { background: #E9DDFB; color: #4C1D95; } .dc.ov { background: #E5E7EB; }
+  .dc.out { background: repeating-linear-gradient(45deg, #EEF0F3 0 3px, #FFFFFF 3px 6px); } .dc.now { box-shadow: inset 2px 0 0 var(--accent); }
+  .dmk { width: 9px; height: 9px; background: #374151; transform: rotate(45deg); border-radius: 2px; display: block; }
   .blab { position: absolute; z-index: 2; border: 0; background: transparent; padding: 0 4px; font: 600 11px/16px inherit; font-family: inherit; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; text-align: left; }
   .blab.late { color: #B91C1C; }
   .dm { position: absolute; top: 3px; width: 7px; height: 7px; transform: translateX(-50%) rotate(45deg); z-index: 1; }
@@ -1924,12 +1933,66 @@ function overviewPane(i, d) {
       <div class="brief ${i.brief ? '' : 'none'}">${loading ? 'Loading the brief…' : i.brief ? esc(i.brief) : 'No brief yet. It fills in from the to-do description on the next sync.'}</div></div>`;
 }
 
+// Who works on it which days: past days as planned, from today the schedule (solid days, as early as possible)
+function dayGrid(i, dd, days, T) {
+  const amount = v => v >= 0.85 ? '1' : v >= 0.4 ? '½' : v > 0.02 ? Math.max(1, Math.round(v * 8)) + 'h' : '';
+  const names = i.team.length ? i.team : [];
+  if (!names.length) return '<div class="sub">No one is on it yet, so nothing is booked.</div>';
+  return withData(dd, () => `<div class="dgrid" style="grid-template-columns:150px repeat(${days.length},minmax(0,1fr))">
+    <span class="dh" style="text-align:left;padding-left:8px">Person</span>${days.map(x => `<span class="dh${+x === +T ? ' now' : ''}${x.getDay() === 1 ? ' wk' : ''}">${'MTWTF'[x.getDay() - 1]}${x.getDay() === 1 ? '<br>' + x.getDate() : ''}</span>`).join('')}
+    ${names.map(n => {
+      const p = dd.people.find(x => x.name === n), ov = i.overs.indexOf(n) !== -1;
+      let left = 0;
+      const cells = days.map(x => {
+        const v = personLoad(i, n, x, x);
+        if (x >= T) left += v;
+        const out = !p || (p.lastD && x > p.lastD) || p.off.some(o => !o.half && o.s <= x && o.e >= x) || HOL[key(x)];
+        const cls = out ? 'out' : !v ? '' : ov ? 'ov' : x < T ? 'past' : 'on';
+        return `<span class="dc ${cls}${+x === +T ? ' now' : ''}" title="${esc(n)} · ${dayLabel(x)}${v ? ' · ' + v.toFixed(2) + ' d' : ''}">${ov || out ? '' : amount(v)}</span>`;
+      }).join('');
+      const short = (i.overflow || {})[n];
+      const sum = ov ? 'Oversight · spread, on top' : i.pastDue ? 'Nothing booked: past due' : short ? 'Short ' + short.toFixed(1) + ' d before ' + fmt(i.e) : (left > 0.05 ? left.toFixed(1) + ' d left · ' : 'Done · ') + (i.est ? daysFor(i, n).toFixed(1) + ' d in all' : 'no estimate');
+      return `<span class="dn"><b>${esc(n)}</b><span class="sub" style="color:${short || (i.pastDue && !ov) ? '#B91C1C' : ov ? 'var(--soft)' : '#047857'}">${sum}</span></span>${cells}`;
+    }).join('')}</div>
+    <div class="row sub" style="gap:14px;font-size:11px"><span><span class="dc on" style="display:inline-block;width:14px;height:10px"></span> Booked</span><span><span class="dc past" style="display:inline-block;width:14px;height:10px"></span> Planned (past)</span><span><span class="dc out" style="display:inline-block;width:14px;height:10px"></span> Out or holiday</span><span>1 = full day · ½ = half day · 2h = hours</span></div>`);
+}
+
 function schedulePane(i, d) {
-  if (!i.wbs) return `<div class="callout info">No work back schedule yet. Add a <b>WBS:</b> heading to the Basecamp to-do (or post one in a reply) with lines like <code>Report Development: Oct 19-23</code>, and the phases show here and on the timeline.</div>
-    ${i.s && i.e ? `<div class="sub">Planned from ${dayLabel(i.s)} to ${dayLabel(i.e)}${i.est ? ', spread evenly over ' + wd(i.s, i.e) + ' working days' : ''}.</div>` : ''}`;
-  return `<div class="row between"><span class="lbl">Work back schedule (${esc(i.wbsFrom)})</span><span class="sub">${i.wbsWork ? 'Effort lands on the work phases only' : 'Add an estimate to spread effort over the phases'}</span></div>
+  const T = d.TODAY;
+  const fromBasecamp = i.wbs && i.wbsFrom !== 'from plan mode';
+  // Working days to show: from the earlier of the start and this week, to a little past the due date (or today)
+  const span = (s, e) => { const a = minD(monday(s), monday(T)), b = maxD(e, T); const out = []; for (let x = a; x <= add(b, 4) && out.length < 25; x = add(x, 1)) if (isWeekday(x)) out.push(x); return out; };
+  if (fromBasecamp) return `<div class="row between"><span class="lbl">Work back schedule (${esc(i.wbsFrom)})</span><span class="sub">${i.wbsWork ? 'Effort lands on the work phases only' : 'Add an estimate to spread effort over the phases'}</span></div>
     ${scheduleSvg(i, d)}
-    <details><summary class="sub" style="cursor:pointer">Show as a list</summary>${wbsBlock(i, d.TODAY)}</details>`;
+    <details><summary class="sub" style="cursor:pointer">Show as a list</summary>${wbsBlock(i, T)}</details>
+    ${i.s && i.e ? `<div style="display:flex;flex-direction:column;gap:8px"><div class="row between"><b>Who's on it, which days</b><span class="sub">Solid days, as early as possible</span></div>${dayGrid(i, d, span(i.s, i.e), T)}</div>` : ''}`;
+  if (!i.s || !i.e) return `<div class="callout info">No dates yet. Add a due date in Basecamp (or use Change dates on the Overview tab), and the schedule shows here.</div>`;
+
+  // Editing: preview the new dates through the full model before saving
+  const ed = S.schedEdit && S.schedEdit.id === i.id ? S.schedEdit : null;
+  let it = i, dd = d;
+  if (ed) { dd = draftModel({ items: { [i.id]: { planStart: ed.s, planIR: ed.ir, planDue: ed.e } }, added: [] }); it = dd.items.find(x => x.id === i.id) || i; }
+  const ph = it.wbs || planWbs(it.s, it.rwS, it.e) || [{ label: 'Work', s: it.s, e: it.e, kind: 'work' }, { label: 'Delivery', s: it.e, e: it.e, kind: 'milestone' }];
+  const days = span(it.s, it.e);
+  const planned = i.hasPlan || !!ed;
+  const phRows = ph.map(x => `<span class="dn"><b>${esc(x.label)}</b><span class="sub">${+x.s === +x.e ? dayLabel(x.s) : fmt(x.s) + ' – ' + fmt(x.e)}</span></span>${days.map(y => `<span class="dc${+y === +T ? ' now' : ''}" style="background:${y >= x.s && y <= x.e ? (x.kind === 'milestone' ? 'transparent' : '#F5D0B8') : 'transparent'}">${y >= x.s && y <= x.e && x.kind === 'milestone' ? '<i class="dmk"></i>' : ''}</span>`).join('')}`).join('');
+  const step = (k, l, hint, val) => `<div style="display:flex;flex-direction:column;gap:4px"><span class="lbl">${l} · ${val}</span><div class="row" style="gap:3px;flex-wrap:nowrap">${[[-5, '−wk'], [-1, '−d'], [1, '+d'], [5, '+wk']].map(([n, t]) => `<button class="btn ghost" style="min-height:34px;padding:0 9px" data-act="sch-step" data-id="${esc(i.id)}" data-k="${k}" data-n="${n}" aria-label="${l}: ${t}">${t}</button>`).join('')}</div><span class="sub">${hint}</span></div>`;
+  const wbsText = 'Tentative WBS:\n' + ph.map(x => '• ' + x.label + ': ' + (+x.s === +x.e ? dayLabel(x.s) : dayLabel(x.s) + ' – ' + dayLabel(x.e))).join('\n');
+  S.wbsCopy = wbsText;
+  const T0 = T, nxt = shiftWd(T0, 1), fri = (() => { let x = T0; while (x.getDay() !== 5) x = add(x, 1); return x; })();
+  const extOpts = [[isWd(T0) ? T0 : nxt, 'Today'], [nxt, 'Tomorrow']].concat(+fri > +nxt ? [[fri, 'Friday']] : []);
+  return `${i.pastDue ? `<div class="callout bad" style="display:flex;flex-direction:column;gap:8px"><b>Past due since ${dayLabel(i.e)}, still open</b><span>Still working on it? Pick when it'll be done and the planner books the rest of the work up to then.</span>
+      <span class="row" style="gap:6px">${extOpts.map(([x, l]) => `<button class="pill" data-act="extend" data-id="${esc(i.id)}" data-to="${isoOf(x)}">${l} · ${fmt(x)}</button>`).join('')}<button class="pill" data-act="next-stage" data-id="${esc(i.id)}" data-stage="Delivered">Mark delivered</button></span></div>` : ''}
+    <div class="row between"><span class="row" style="gap:8px"><b style="font-size:15px">Schedule</b><span class="chip" style="${planned ? 'background:#F2E4FF;color:#6100DB' : 'background:#F3F4F6;color:#374151'}">${ed ? 'Not saved yet' : planned ? 'Planner dates' : 'Assumed'}</span></span>
+      ${i.hasPlan && !ed ? `<button class="pill" data-act="clear-plan" data-id="${esc(i.id)}">Use Basecamp dates</button>` : ''}</div>
+    <span class="sub">${planned ? 'Set in the planner.' + (i.dueBasecampD && +i.dueBasecampD !== +it.e ? ' Basecamp still says ' + dayLabel(i.dueBasecampD) + '; copy the WBS below to update it there.' : '') : 'No WBS in Basecamp, so the planner assumes these phases from the start and due dates: review and revisions take the last quarter.'}</span>
+    <div class="dgrid" style="grid-template-columns:150px repeat(${days.length},minmax(0,1fr))"><span class="dh" style="text-align:left;padding-left:8px">Phase</span>${days.map(x => `<span class="dh${+x === +T ? ' now' : ''}${x.getDay() === 1 ? ' wk' : ''}">${'MTWTF'[x.getDay() - 1]}${x.getDay() === 1 ? '<br>' + x.getDate() : ''}</span>`).join('')}${phRows}</div>
+    <div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">${step('move', 'Move it', 'Phases and people move together', fmt(it.s) + '–' + fmt(it.e))}${step('s', 'Start', 'Development absorbs it', dayLabel(it.s))}${step('e', 'Due', 'Review keeps its place before delivery', dayLabel(it.e))}</div>
+    ${ed ? `<div class="row" style="gap:8px"><button class="btn primary" data-act="sch-save" data-id="${esc(i.id)}">Save dates</button><button class="btn ghost" data-act="sch-undo">Undo</button><span class="sub">Saved as plan dates in the Planner. Basecamp isn't changed.</span></div>` : ''}
+    <div style="display:flex;flex-direction:column;gap:8px"><div class="row between"><b>Who's on it, which days</b><span class="sub">Solid days, as early as possible</span></div>${dayGrid(it, dd, days, T)}</div>
+    <div style="display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line2);padding-top:12px"><div class="row between"><b>Add it to Basecamp</b><button class="pill" data-act="copy-wbs">Copy WBS</button></div>
+      <span class="sub">Paste this into the to-do's description (or a reply). The next sync reads it, and from then on Basecamp's WBS is the source.</span>
+      <pre class="brief" style="white-space:pre-wrap;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(wbsText)}</pre></div>`;
 }
 
 function peoplePane(i, d) {
@@ -2335,6 +2398,26 @@ document.addEventListener('click', e => {
       .withFailureHandler(err => { el.disabled = false; toast('Could not save: ' + err.message); })
       .setPlanFields(item.row, item.id, f);
   }
+  else if (el.dataset.act === 'sch-step') {
+    const item = S.data.items.find(x => x.id === el.dataset.id); if (!item || !item.s || !item.e) return;
+    const ed = S.schedEdit && S.schedEdit.id === item.id ? S.schedEdit : { id: item.id, s: isoOf(item.s), ir: isoOf(item.rwS && item.rwS < item.e ? item.rwS : shiftWd(item.e, -1)), e: isoOf(item.e) };
+    let s0 = P(ed.s), ir0 = P(ed.ir), e0 = P(ed.e); const n = Number(el.dataset.n), k = el.dataset.k;
+    if (k === 'move') { s0 = shiftWd(s0, n); ir0 = shiftWd(ir0, n); e0 = shiftWd(e0, n); }
+    if (k === 's') { const x = shiftWd(s0, n); if (x >= ir0) { toast('Start has to be before internal review'); return; } s0 = x; }
+    if (k === 'e') { const x = shiftWd(e0, n), y = shiftWd(ir0, n); if (y <= s0) { toast('Due has to stay after the start'); return; } e0 = x; ir0 = y; }
+    // Internal review stays at least a working day before delivery when there's room
+    const lastIR = shiftWd(e0, -1); if (ir0 > lastIR && lastIR > s0) ir0 = lastIR;
+    S.schedEdit = { id: item.id, s: isoOf(s0), ir: isoOf(ir0), e: isoOf(e0) }; renderLayer();
+  }
+  else if (el.dataset.act === 'sch-undo') { S.schedEdit = null; renderLayer(); }
+  else if (el.dataset.act === 'sch-save') {
+    const item = S.data.items.find(x => x.id === el.dataset.id), ed = S.schedEdit; if (!item || !ed) return;
+    el.disabled = true;
+    google.script.run.withSuccessHandler(() => { S.schedEdit = null; toast('Dates saved: ' + fmt(P(ed.s)) + ' to ' + fmt(P(ed.e))); load(); })
+      .withFailureHandler(err => { el.disabled = false; toast('Could not save: ' + err.message); })
+      .setPlanFields(item.row, item.id, { planStart: ed.s, planIR: ed.ir, planDue: ed.e });
+  }
+  else if (el.dataset.act === 'copy-wbs') { const t = S.wbsCopy || ''; try { navigator.clipboard.writeText(t).then(() => toast('WBS copied'), () => toast('Select the WBS and copy it')); } catch (e) { toast('Select the WBS and copy it'); } }
   else if (el.dataset.act === 'past-toggle') { S.pastOpen[el.dataset.k] = !S.pastOpen[el.dataset.k]; render(); }
   else if (el.dataset.act === 'dates-edit') { S.datesEdit = S.datesEdit === el.dataset.id ? null : el.dataset.id; renderLayer(); }
   else if (el.dataset.act === 'clear-plan') {
