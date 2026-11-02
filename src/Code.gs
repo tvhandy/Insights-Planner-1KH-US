@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.11.02.2';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.11.02.3';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -1036,6 +1036,8 @@ function weeklyDigest(e) {
   if (e && e.triggerUid && !isSyncOwner_()) return null;
   const info = { at: new Date().toISOString(), preview: false };
   info.post = postDigestToBasecamp_(false);
+  // Keep the Message Board tidy: earlier digests are archived once they're 3 weeks old (a failure here never blocks the digest)
+  try { info.archived = archiveOldDigests(); } catch (err) { info.archived = 0; console.log('Could not archive old digests: ' + err.message); }
   const fixed = PropertiesService.getScriptProperties().getProperty('DIGEST_TO');
   if (fixed) { sendDigest_(digestRecipients_(), false); info.count = digestRecipients_().length; }
   PropertiesService.getScriptProperties().setProperty('DIGEST_LAST', JSON.stringify(info));
@@ -1420,6 +1422,21 @@ function postDigestToBasecamp_(preview) {
     } catch (e) { out.campfire = false; console.log('Campfire post failed: ' + e.message); }
   }
   return out;
+}
+// Archives Monday digests on the Message Board once they're 3 weeks old, so only the latest three stay on the board.
+// Archived posts aren't deleted: they're under the project's Archive in Basecamp and can be unarchived there.
+const DIGEST_KEEP_DAYS = 20;   // a digest posted three Mondays ago is archived on the fourth
+function archiveOldDigests() {
+  const service = postingService_();
+  const t = digestTarget_(service);
+  const cutoff = Date.now() - DIGEST_KEEP_DAYS * 864e5;
+  const msgs = apiGetAll_(service, 'https://3.basecampapi.com/' + BC_ACCOUNT_ID + '/buckets/' + t.bucket + '/message_boards/' + t.board + '/messages.json');
+  let n = 0;
+  msgs.filter(m => /^Insights week of /.test(String(m.subject || '')) && new Date(m.created_at).getTime() < cutoff && m.status === 'active').forEach(m => {
+    try { bcSend_(service, 'put', 'https://3.basecampapi.com/' + BC_ACCOUNT_ID + '/buckets/' + t.bucket + '/recordings/' + m.id + '/status/archived.json'); n++; }
+    catch (err) { console.log('Could not archive "' + m.subject + '": ' + err.message); }
+  });
+  return n;
 }
 // "📬 The Insights digest for the week of Oct 26 is up. 4 due this week, 2 delivered last week, Leana L. out Thu–Fri. Read it here: <link>"
 function campfireLine_(g, url) {
