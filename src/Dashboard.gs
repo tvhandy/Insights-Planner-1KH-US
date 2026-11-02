@@ -641,6 +641,9 @@ function setPlanFields(row, id, f) {
   if (f.due) { r = writeCell_(r.row, id, 13, P(f.due)); said.push('Dates: ' + (f.start || '…') + ' to ' + f.due); }
   if (f.likelihood) { r = writeCell_(r.row, id, 30, f.likelihood); said.push('Likelihood: ' + f.likelihood); }
   if (f.link) { r = writeCell_(r.row, id, COL.link, String(f.link).trim()); said.push('Basecamp link added'); }
+  // Plan dates (columns AH and AJ): win over Basecamp's dates without changing Basecamp
+  if (f.planStart !== undefined) r = writeCell_(r.row, id, 34, f.planStart ? P(f.planStart) : '');
+  if (f.planDue) { r = writeCell_(r.row, id, 36, P(f.planDue)); said.push('Plan dates: ' + (f.planStart || '…') + ' to ' + f.planDue); }
   if (said.length) logRow_(r.row, 'stage', said.join(' · '));
   return { row: r.row, id: id };
 }

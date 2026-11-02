@@ -660,6 +660,8 @@ function prep(d) {
     i.sub = i.account.indexOf('Google') === 0 ? i.account.replace(/^Google( – | - )?/, '') : '';
     i.open = OPEN_EXCLUDE.indexOf(i.stage) === -1;
     i.tent = i.booking === 'Tentative';
+    // Past its due date but not delivered: stays on the timeline until it's delivered or given a new date
+    i.pastDue = !!(i.open && !i.tent && i.e && i.e < d.TODAY && i.stage !== 'Needs triage');
   });
   d.people = d.team.filter(p => p.include).map(p => ({
     ...p, lastD: P(p.last), startD: P(p.start),
@@ -1458,21 +1460,22 @@ function timelineLanes(d, T, hz, people, opts) {
     const PR = { High: 0, Medium: 1, Low: 2 };
     // Each person's bar covers their own window (whole project, development, or review and revisions)
     const mine = S.data.items.filter(i => i.open && (onIt(i, owner) || (owner && coverFor(i, owner, hz.s, hz.e))) && i.s && i.e)
-      .map(i => { const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e]; return { i, s: r[0], e: r[1], ov: !!owner && i.overs.indexOf(owner) !== -1 && i.team.length > 1 }; })
+      .map(i => { const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e]; const ext = !!(i.pastDue && r[1] && +r[1] === +i.e); return { i, s: r[0], e: ext ? T : r[1], ext, ov: !!owner && i.overs.indexOf(owner) !== -1 && i.team.length > 1 }; })
       .filter(x => x.s && x.e && x.e >= hz.s && x.s <= hz.e)
       .sort((a, b) => (a.ov - b.ov) || (PR[a.i.priority] ?? 1) - (PR[b.i.priority] ?? 1) || a.s - b.s);
     const rows = [];
     let yTop = 0;
     const rowH = [];
-    const bars = mine.map(({ i, s: bS, e: bE, ov }) => {
+    // Past due but still open: the bar runs to today, outlined red, until it's delivered or given a new date
+    const bars = mine.map(({ i, s: bS, e: bE, ov, ext }) => {
       let r = rows.findIndex((row, k) => (rowH[k] === (ov ? 26 : 40)) && row.every(o => o.e < bS || o.s > bE));
       if (r === -1) { r = rows.length; rows.push([]); rowH.push(ov ? 26 : 40); }
       rows[r].push({ s: bS, e: bE });
       const top = 6 + rowH.slice(0, r).reduce((t, h) => t + h, 0);
-      const atDue = +bE === +i.e;
+      const atDue = +bE === +i.e || ext;
       const [c, tint] = CLIENT[i.client]; usedClients[i.client] = 1;
       const l = bpos(maxD(bS, hz.s)), rr = bpos(add(minD(bE, hz.e), 1)), w = Math.max(rr - l, 0.2);
-      const cutL = bS < hz.s, cutR = bE > hz.e, past = atDue && i.e < T, dueToday = atDue && +i.e === +T;
+      const cutL = bS < hz.s, cutR = bE > hz.e, past = atDue && i.e < T && i.open, dueToday = atDue && +i.e === +T;
       const solid = !i.tent && !ov && SOLID.indexOf(i.stage) !== -1;
       const look = ov ? 'background:#EEF0F3;color:#374151;border:0'
         : i.tent ? `background:repeating-linear-gradient(45deg,${tint} 0 6px,#fff 6px 12px);color:${c};border:1.5px dashed ${c}`
@@ -1506,7 +1509,7 @@ function timelineLanes(d, T, hz, people, opts) {
         if (nowStep && i.wbs) meta.push((nowStep.s <= T ? 'Now: ' : 'Next: ') + esc(nowStep.label));
         if (i.needsSplit) meta.push('split not set');
         if (i.tlFlag) meta.push('timeline changed');
-        if (atDue) meta.push(past ? 'past due' : dueToday ? 'due today' : 'due ' + DOW[i.e.getDay()] + ' ' + fmt(i.e));
+        if (atDue) meta.push(past ? 'past due (' + fmt(i.e) + '), still open' : dueToday ? 'due today' : 'due ' + DOW[i.e.getDay()] + ' ' + fmt(i.e));
       }
       const lock = atDue && !cutR && i.clientDate ? `<span class="lk" title="Client date">${I.lock}</span>` : '';
       return `<button class="bar${ov ? ' ovb' : ''}" ${opts.pick ? 'data-pl="sel" data-id' : 'data-open'}="${esc(i.id)}" title="${esc(i.title)}${ov ? ' (oversight)' : ''}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${top}px;left:calc(${pct(l)}% + 3px);width:calc(${pct(w)}% - 6px);min-width:30px;${look};${opts.sel === i.id ? 'box-shadow:0 0 0 3px #fff,0 0 0 5px #7C3AED;z-index:3;' : past ? 'box-shadow:0 0 0 2px #fff,0 0 0 4px #DC2626;' : ''}${i.isNew || i.planned ? 'outline:2px dashed #7C3AED;outline-offset:1px;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
@@ -1795,6 +1798,14 @@ function loadCard(i) {
 
 function cardAlerts(i, d) {
   const out = [];
+  if (i.pastDue) {
+    const T = d.TODAY, nxt = shiftWd(T, 1), fri = (() => { let x = T; while (x.getDay() !== 5) x = add(x, 1); return x; })();
+    const opts = [[isWd(T) ? T : nxt, 'Today'], [nxt, 'Tomorrow']].concat(+fri > +nxt ? [[fri, 'Friday']] : []);
+    out.push(['Past due, still open', 'bad', `It was due ${dayLabel(i.e)} and isn't marked Delivered, so it books no time from today. Still working on it? Pick when it'll be done; the planner books the rest of the work up to then (Basecamp isn't changed).
+      <span class="row" style="gap:6px;margin-top:8px">${opts.map(([x, l]) => `<button class="pill" data-act="extend" data-id="${esc(i.id)}" data-to="${isoOf(x)}">${l} · ${fmt(x)}</button>`).join('')}
+      <input type="date" class="sel" id="ext_${esc(i.id)}" style="width:auto;min-height:34px" aria-label="New date"><button class="pill" data-act="extend-pick" data-id="${esc(i.id)}">Set date</button>
+      <button class="pill" data-act="next-stage" data-id="${esc(i.id)}" data-stage="Delivered">Mark delivered</button></span>`]);
+  }
   const ovf = Object.keys(i.overflow || {}).filter(n => i.overflow[n] > 0.05);
   if (i.open && ovf.length) out.push(['Won\'t fit before the due date', 'bad', ovf.map(n => esc(n) + ' is short ' + i.overflow[n].toFixed(1) + ' d').join('; ') + '. There aren\'t enough free days before it\'s due once more urgent work and time off are booked. Move the due date, add someone, or shift other work in Plan mode.']);
   if (i.open && i.needsSplit && i.est) out.push(['Set the split', 'warn', `${i.team.filter(n => i.overs.indexOf(n) === -1).length} people are on this, so their ${i.handsEst.toFixed(1)} d are split evenly for now. Open <b>People and days</b> to set each person's days and when they work on it.`]);
@@ -1880,6 +1891,8 @@ function overviewPane(i, d) {
     <dl class="facts">
       <dt>Lead</dt><dd>${esc(i.lead || '—')}${i.owner && i.owner !== i.lead ? ' <span class="sub">(Owner: ' + esc(i.owner) + ')</span>' : ''}</dd>
       <dt>Due</dt><dd>${(i.dueBC || (!i.wbs && i.e)) ? dayLabel(i.dueBC || i.e) + (i.wbs ? ' <span class="sub">Basecamp</span>' : '') : (i.wbs ? 'Not set in Basecamp' : '—')}
+        <button class="pill" style="margin-left:6px" data-act="dates-edit" data-id="${esc(i.id)}">Change dates</button>
+        ${S.datesEdit === i.id ? `<span class="row" style="gap:6px;margin-top:8px"><label class="sub">Start <input type="date" class="sel" id="pd_start" style="width:auto" value="${isoOf(i.s)}"></label><label class="sub">Due <input type="date" class="sel" id="pd_due" style="width:auto" value="${isoOf(i.e)}"></label><button class="pill on" data-act="dates-save" data-id="${esc(i.id)}">Save</button><span class="sub">Saved as plan dates. Basecamp isn't changed.</span></span>` : ''}
         ${i.hasPlan ? `<br><span class="sub">Plan date${i.dueBasecampD && i.e && +i.dueBasecampD !== +i.e ? ' · Basecamp says ' + dayLabel(i.dueBasecampD) : ''}</span> <button class="pill" data-act="clear-plan" data-id="${esc(i.id)}" title="Drop the plan mode dates and use Basecamp's again">Use Basecamp dates</button>` : ''}
         ${i.e ? `<button class="pill ${i.clientDate ? 'on' : ''}" style="margin-left:6px" data-act="client-date" data-id="${esc(i.id)}" aria-pressed="${i.clientDate ? 'true' : 'false'}" title="A due date promised to the client">${I.lock} ${i.clientDate ? 'Client date' : 'Mark as client date'}</button>` : ''}</dd>
       <dt>Type</dt><dd>${esc(i.type || '—')}${i.est ? ' · ' + i.est.toFixed(1) + ' d' : ''}</dd>
@@ -2283,6 +2296,25 @@ document.addEventListener('click', e => {
     const H = horizons(S.data.TODAY), hz = H[S.horizon];
     exportTimeline(S.data, hz, 1, 'Insights timeline · ' + hz.label + ' · ' + fmt(S.data.TODAY), el);
   }
+  else if (el.dataset.act === 'extend' || el.dataset.act === 'extend-pick' || el.dataset.act === 'dates-save') {
+    const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
+    let f;
+    if (el.dataset.act === 'dates-save') {
+      const st = (document.getElementById('pd_start') || {}).value || '', du = (document.getElementById('pd_due') || {}).value || '';
+      if (!du) { toast('Pick a due date'); return; }
+      if (st && st > du) { toast('Start has to be on or before the due date'); return; }
+      f = { planStart: st, planDue: du };
+    } else {
+      const to = el.dataset.act === 'extend' ? el.dataset.to : ((document.getElementById('ext_' + item.id) || {}).value || '');
+      if (!to) { toast('Pick a date'); return; }
+      f = { planDue: to, planStart: item.s ? isoOf(item.s) : '' };
+    }
+    el.disabled = true;
+    google.script.run.withSuccessHandler(() => { S.datesEdit = null; toast('Dates saved: ' + (f.planStart ? fmt(P(f.planStart)) + ' to ' : 'due ') + fmt(P(f.planDue))); load(); })
+      .withFailureHandler(err => { el.disabled = false; toast('Could not save: ' + err.message); })
+      .setPlanFields(item.row, item.id, f);
+  }
+  else if (el.dataset.act === 'dates-edit') { S.datesEdit = S.datesEdit === el.dataset.id ? null : el.dataset.id; renderLayer(); }
   else if (el.dataset.act === 'clear-plan') {
     const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
     el.disabled = true;
