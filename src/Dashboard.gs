@@ -179,10 +179,15 @@ function addNote(id, text) {
   const ss = ss_();
   let ns = ss.getSheetByName('Notes');
   if (!ns) { ns = ss.insertSheet('Notes'); ns.appendRow(['Timestamp', 'ID', 'Deliverable', 'Author', 'Note']); }
-  const pl = ss.getSheetByName('Planner');
-  const ids = pl.getRange(2, 1, Math.max(pl.getLastRow() - 1, 1), 4).getValues();
-  const row = ids.find(r => String(r[0]) === String(id));
-  if (!row) throw new Error('Could not find ' + id + ' in the Planner.');
+  // Handover notes for a leave are keyed LEAVE-<time off id>, not a Planner row
+  let row;
+  if (/^LEAVE-/.test(String(id))) row = [id, '', '', 'Handover notes'];
+  else {
+    const pl = ss.getSheetByName('Planner');
+    const ids = pl.getRange(2, 1, Math.max(pl.getLastRow() - 1, 1), 4).getValues();
+    row = ids.find(r => String(r[0]) === String(id));
+    if (!row) throw new Error('Could not find ' + id + ' in the Planner.');
+  }
   const author = displayName_();
   const now = new Date();
   ns.appendRow([now, id, row[3], author, t]);
