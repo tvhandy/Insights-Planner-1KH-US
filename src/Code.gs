@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.10.29.7';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.11.02.1';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -247,7 +247,6 @@ function setup() {
   ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(DIGEST_HOUR).create();
   ScriptApp.newTrigger('wednesdayCheckin').timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(CHECKIN_HOUR).create();
   if (registry_()[userKey_(String(currentEmail_()).toLowerCase())]) ScriptApp.newTrigger('backupRun').timeBased().everyHours(BACKUP_EVERY_HOURS).create();
-  ScriptApp.newTrigger('fridayWrap').timeBased().onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(WRAP_HOUR).nearMinute(0).create();
   const email = currentEmail_();
   const full = typeof displayName_ === 'function' ? displayName_() : email;
   const name = matchTeamName_(full) || full;   // "Tom Handy" → "Tom H." when on the Team tab
@@ -1174,7 +1173,8 @@ function digestData_() {
   });
   d.team.forEach(p => {
     const st = P(p.start), la = P(p.last);
-    if (st && st >= add(T, -14) && st <= add(T, 90)) cal.hires.push('<strong>' + esc_(p.name) + '</strong>' + (p.role ? ' (' + esc_(p.role) + ')' : '') + (st > T ? ' starts ' + f(st) + ' (' + until(st) + ')' : ' joined ' + f(st) + '. Welcome!'));
+    // Welcomed once: the first Monday on or after their start date (not for the next two weeks)
+    if (st && st > add(T, -7) && st <= add(T, 90)) cal.hires.push('<strong>' + esc_(p.name) + '</strong>' + (p.role ? ' (' + esc_(p.role) + ')' : '') + (st > T ? ' starts ' + f(st) + ' (' + until(st) + ')' : ' joined ' + f(st) + '. Welcome!'));
     if (la && la >= T && la <= add(T, 90)) cal.leaving.push('<strong>' + esc_(p.name) + '</strong>\'s last day is ' + f(la) + ' (' + until(la) + ')');
   });
   d.holidays.forEach(h => { const x = P(h.date); if (x && x >= T && x <= add(T, 42)) cal.holidays.push(esc_(h.name) + ' · ' + f(x)); });
@@ -1248,13 +1248,22 @@ function sendDigest_(to, preview) {
 // - a Basecamp reply with an EXT file: the reply's date
 // - moved to Delivered: the earlier of the due date and the day it was marked.
 //   A row due Oct 1 but marked Delivered on Oct 22 (catch-up) counts as Oct 1, so it doesn't show up as "last week".
+// Not deliverables: internal admin, and follow-up to-dos (reviews, readouts, planning, scheduling) on work that already shipped
+const NOT_DELIVERABLE_RX = /\b(training|benefits?|enroll|onboarding|workbook|timesheets?|1:1s?|one[- ]on[- ]ones?|schedul\w*|kick ?offs?|meetings?|calls?|syncs?|check[- ]ins?|readouts?|reviews?|plans?|planning|prep)\b/i;
+function isClientDeliverable_(i) {
+  if (/^internal\b/i.test(String(i.account || '')) || /\(1KH\)/i.test(String(i.account || ''))) return false;
+  return !NOT_DELIVERABLE_RX.test(String(i.title || ''));
+}
 function deliveredOn_(i, P) {
-  if (i.stage === 'Dismissed') return null;
+  if (i.stage === 'Dismissed' || !isClientDeliverable_(i)) return null;
   const ext = (i.replies || []).filter(x => x.at && x.ext && x.ext.length).map(x => new Date(x.at));
   if (ext.length) return new Date(Math.max.apply(null, ext));
-  if (i.stage !== 'Delivered' || !P(i.stageSince)) return null;
-  const marked = P(i.stageSince), due = i.due ? P(i.due) : null;
-  return due && due < marked ? due : marked;
+  // Marked done with no due date: no way to tell when it shipped, so it's left out
+  if (i.stage !== 'Delivered' || !P(i.stageSince) || !i.due) return null;
+  const marked = P(i.stageSince), due = P(i.due);
+  // Ticked off more than a week after it was due: a catch-up, not last week's work
+  if (marked - due > 7 * 864e5) return null;
+  return due < marked ? due : marked;
 }
 function deliveredIn_(d, P, a, b) {
   return d.items.filter(i => { const t = deliveredOn_(i, P); return t && t >= a && t < b; });
@@ -1419,7 +1428,7 @@ function campfireLine_(g, url) {
   if (g.outWk.length) bits.push(g.outWk.join(', ') + ' out');
   return '📬 The Insights digest for the week of ' + g.fs(g.mon) + ' is up. ' + bits.join(', ').replace(/^./, c => c.toUpperCase()) + '. Read it here: ' + url;
 }
-// ===== Campfire: Wednesday check-in and Friday wrap-up =====
+// ===== Campfire: Wednesday check-in (the Friday wrap-up is retired) =====
 function campfirePost_(text) {
   const service = postingService_();
   const t = digestTarget_(service);
@@ -1439,7 +1448,7 @@ const CHECKIN_MESSAGES = [
   '💬 Wednesday check-in: if you\'ve got a bit of room this week, offer it up. If you could use a second pair of eyes, ask. That\'s what the team\'s for.',
   '🙌 Shout-out Wednesday! Has a teammate helped you out lately? Give them a thank-you here.',
   '🧘 Midweek reminder to step away from the screen for a few minutes today. Stretch, grab a coffee, get some air. The data will still be there.',
-  '🌱 How\'s the week treating you? If anything feels off, reach out to a teammate or your manager. No issue is too small.',
+  '🌱 How\'s the week treating you? If anything feels off, reach out to {lead} or anyone on the team. No issue is too small.',
   '🧩 Midweek check-in: anything you\'re working on that someone else on the team might know a trick for? Ask away.',
   '🎧 Happy hump day! What\'s keeping you going this week: a playlist, a podcast, a good snack? Share if you\'d like.',
   '📣 Wednesday nudge: if a deadline is looking tight, flag it early. It\'s much easier to help on Wednesday than on Friday.',
@@ -1453,9 +1462,25 @@ const CHECKIN_MESSAGES = [
   '🤗 Wednesday check-in: ask a teammate if there\'s anything you can take off their plate, or anything they can help you with.',
   '⏸️ Midweek pause: take a breath. You\'re doing great work. Anything the team can do to make the rest of this week easier?'
 ];
+// {lead} = the head of the team (Oversight on the Team tab, first name), or whoever covers them while they're on leave
+function checkinText_(week) {
+  let msg = CHECKIN_MESSAGES[week % CHECKIN_MESSAGES.length];
+  if (msg.indexOf('{lead}') === -1) return msg;
+  let lead = '';
+  try {
+    const d = getDashboardData(), tz = ss_().getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+    const ov = d.team.find(p => p.projectRole === 'Oversight');
+    lead = ov ? ov.name : '';
+    const away = d.timeOff.find(o => o.name === lead && !o.half && o.start <= today && o.end >= today);
+    const cover = away ? (String(away.note || '').match(/cover(?:age|ed\s*by|ing)?\s*[:\-–]?\s*([^.;,\n]+)/i) || [])[1] : '';
+    if (away) lead = cover ? cover.trim() : '';
+  } catch (err) { lead = ''; }
+  const first = String(lead).split(' ')[0];
+  return first ? msg.replace('{lead}', first) : msg.replace('reach out to {lead} or anyone on the team', 'reach out to anyone on the team');
+}
 function wednesdayCheckin(e) {
   if (e && e.triggerUid && !isSyncOwner_()) return null;
-  const out = campfirePost_(CHECKIN_MESSAGES[weekNumber_() % CHECKIN_MESSAGES.length]);
+  const out = campfirePost_(checkinText_(weekNumber_()));
   PropertiesService.getScriptProperties().setProperty('CHECKIN_LAST', out.at);
   return out;
 }
@@ -1484,7 +1509,10 @@ function fridayWrapText_() {
   parts.push('Next week (' + fs(nmon) + '): ' + next.join(', ') + '. Have a great weekend!');
   return parts.join(' ');
 }
+// Retired Nov 2026: the Friday wrap no longer posts. An old trigger that still calls it does nothing.
+const FRIDAY_WRAP_ON = false;
 function fridayWrap(e) {
+  if (!FRIDAY_WRAP_ON) return null;
   if (e && e.triggerUid && !isSyncOwner_()) return null;
   const out = campfirePost_(fridayWrapText_());
   PropertiesService.getScriptProperties().setProperty('WRAP_LAST', out.at);
@@ -1901,7 +1929,7 @@ function backupRun(e) {
     const dg = read('DIGEST_LAST');
     if (dow === 1 && hour >= DIGEST_HOUR + 2 && dayOf(dg && dg.at) !== today) { weeklyDigest(); did.push('digest'); }
     if (dow === 3 && hour >= CHECKIN_HOUR + 2 && dayOf(props.getProperty('CHECKIN_LAST')) !== today) { wednesdayCheckin(); did.push('check-in'); }
-    if (dow === 5 && hour >= WRAP_HOUR + 1 && dayOf(props.getProperty('WRAP_LAST')) !== today) { fridayWrap(); did.push('wrap'); }
+    if (FRIDAY_WRAP_ON && dow === 5 && hour >= WRAP_HOUR + 1 && dayOf(props.getProperty('WRAP_LAST')) !== today) { fridayWrap(); did.push('wrap'); }
     if (did.length) props.setProperty('BACKUP_LAST', JSON.stringify({ at: now.toISOString(), by: who, did: did }));
   } finally { cache.remove('backup_running'); }
   return did;
