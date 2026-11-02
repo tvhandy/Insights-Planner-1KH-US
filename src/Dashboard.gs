@@ -190,7 +190,7 @@ function addNote(id, text) {
   }
   const author = displayName_();
   const now = new Date();
-  ns.appendRow([now, id, row[3], author, t]);
+  ns.appendRow([now, id, cellSafe_(row[3]), author, cellSafe_(t)]);
   logActivity_('note', id, row[3], matchTeamName_(author) || author, t.slice(0, 400), '');
   return { at: Utilities.formatDate(now, ss.getSpreadsheetTimeZone(), "MMM d, h:mm a"), id: id, author: author, text: t };
 }
@@ -275,7 +275,7 @@ function addTimeOff(f) {
     const last = sh.getLastRow();
     const ids = last > 1 ? sh.getRange(2, 1, last - 1, 1).getValues().map(r => Number(String(r[0]).replace(/\D/g, '')) || 0) : [];
     const id = 'TO-' + ('00' + (Math.max(0, ...ids) + 1)).slice(-3);
-    sh.getRange(last + 1, 1, 1, 9).setValues([[id, x.name, x.start, x.end, x.type, x.day, x.notes, displayName_(), new Date()]]);
+    sh.getRange(last + 1, 1, 1, 9).setValues([[id, x.name, x.start, x.end, x.type, x.day, cellSafe_(x.notes), displayName_(), new Date()]]);
     sh.getRange(last + 1, 3, 1, 2).setNumberFormat('ddd, mmm d, yyyy');
     sh.getRange(last + 1, 9).setNumberFormat('mmm d, yyyy h:mm am/pm');
     logActivity_('timeoff', id, x.name + ' · ' + x.type, displayName_(), 'Added ' + x.type.toLowerCase() + (x.day !== 'Full day' ? ' (' + x.day.toLowerCase() + ')' : '') + ': ' + timeOffRange_(x), '');
@@ -294,7 +294,7 @@ function updateTimeOff(id, f) {
   const lock = LockService.getScriptLock(); lock.waitLock(10000);
   try {
     const sh = timeOffSheet_(), r = timeOffRow_(sh, id);
-    sh.getRange(r, 2, 1, 6).setValues([[x.name, x.start, x.end, x.type, x.day, x.notes]]);
+    sh.getRange(r, 2, 1, 6).setValues([[x.name, x.start, x.end, x.type, x.day, cellSafe_(x.notes)]]);
     logActivity_('timeoff', id, x.name + ' · ' + x.type, displayName_(), 'Changed to ' + timeOffRange_(x) + (x.day !== 'Full day' ? ' (' + x.day.toLowerCase() + ')' : ''), '');
     return id;
   } finally { lock.releaseLock(); }
@@ -367,7 +367,7 @@ function sendFeedback(f) {
     sh.setFrozenRows(1);
   }
   const who = displayName_();
-  sh.appendRow([new Date(), who, String(f.tab || ''), text, 'New']);
+  sh.appendRow([new Date(), who, String(f.tab || ''), cellSafe_(text), 'New']);
   logActivity_('feedback', '', 'Planner feedback (' + (f.tab || '') + ')', who, text.slice(0, 400), '');
   if (f.share) { try { campfirePost_('💬 Planner feedback from ' + who + ' (' + (f.tab || 'dashboard') + '): ' + text); } catch (e) { console.log('Campfire post failed: ' + e.message); } }
   return true;
@@ -545,7 +545,7 @@ function savePlanDraft(dr) {
     const id = k === -1 ? 'PL-' + Utilities.formatDate(new Date(), 'UTC', 'yyMMddHHmmss') : String(dr.id);
     const row = k === -1 ? n + 1 : k + 2;
     const prev = k === -1 ? ['', '', me, ''] : sh.getRange(row, 1, 1, 4).getValues()[0];
-    sh.getRange(row, 1, 1, 6).setValues([[id, dr.name || prev[1] || 'Plan', prev[2] || me, prev[3] || '', new Date(), json]]);
+    sh.getRange(row, 1, 1, 6).setValues([[id, cellSafe_(dr.name || prev[1] || 'Plan'), prev[2] || me, prev[3] || '', new Date(), json]]);
     return { id: id, updated: new Date().toISOString() };
   } finally { lock.releaseLock(); }
 }
@@ -635,7 +635,7 @@ function bookWork(f) {
     v[COL.priority] = DEFAULT_PRIORITY; v[COL.notes] = String(f.notes || '');
     v[COL.source] = 'Booked in dashboard'; v[COL.added] = new Date(); v[COL.booking] = 'Tentative';
     v[COL.likelihood] = f.likelihood || 'Likely'; v[COL.stageSince] = new Date();
-    Object.keys(v).forEach(c => sheet.getRange(r, Number(c)).setValue(v[c]));
+    Object.keys(v).forEach(c => sheet.getRange(r, Number(c)).setValue(cellSafe_(v[c])));
     const full = displayName_();
     logActivity_('new', v[COL.id], title, matchTeamName_(full) || full, 'Booked as Tentative (' + v[COL.likelihood] + '), due ' + f.due + (people.length ? ' · ' + people.join(', ') : ' · needs an owner'), '');
     return { id: v[COL.id], row: r };
@@ -672,7 +672,7 @@ function writeCell_(row, id, col, value) {
       r = i + 2;
     }
     if (col > sheet.getMaxColumns()) sheet.insertColumnsAfter(sheet.getMaxColumns(), col - sheet.getMaxColumns());
-    sheet.getRange(r, col).setValue(value);
+    sheet.getRange(r, col).setValue(cellSafe_(value));
     if (col === 11) sheet.getRange(r, 31).setValue(new Date());   // Stage since
     return { row: r, id: id, value: value };
   } finally {

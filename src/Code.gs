@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.11.02.8';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.11.02.9';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -450,7 +450,7 @@ function addDeliverable(f) {
     v[COL.source] = item ? SOURCE_LABEL : 'Manual';
     v[COL.added] = new Date();
     v[COL.brief] = item ? briefOf_(item) : '';
-    Object.keys(v).forEach(c => sheet.getRange(row, Number(c)).setValue(v[c]));
+    Object.keys(v).forEach(c => sheet.getRange(row, Number(c)).setValue(cellSafe_(v[c])));
     return 'Added ' + v[COL.id] + ': ' + v[COL.deliverable];
   } finally {
     lock.releaseLock();
@@ -468,8 +468,10 @@ function dailySync(e) {
 }
 
 // Runs the full sync and records the result for the dashboard's Settings tab
+var SYNC_STARTED_ = null;
 function runSync_(by) {
   const started = Date.now();
+  SYNC_STARTED_ = started;
   let prev = null;
   try { prev = JSON.parse(PropertiesService.getScriptProperties().getProperty('SYNC_LAST') || 'null'); } catch (e) {}
   const run = { at: new Date().toISOString(), by: by, ok: true, added: 0, checked: 0, completed: 0, updated: 0, failed: 0, users: [], error: '' };
@@ -484,6 +486,8 @@ function runSync_(by) {
     try { run.logged = logToTracker_(); } catch (e) { console.log('Tracker log failed: ' + e.message); run.trackerError = e.message; }
     try { writeTeamCapacity_(); } catch (e) { console.log('Team tab capacity failed: ' + e.message); }
     run.checked = r.checked || 0; run.completed = r.completed || 0; run.updated = r.updated || 0; run.failed = r.failed || 0; run.gone = r.gone || 0;
+    if (r.left) run.partial = 'Ran out of time with ' + r.left + ' rows left to check; the next run starts there.';
+    if (r.skipped && r.skipped.length) run.skipped = r.skipped;
     if (team.users.some(u => !u.ok) || run.failed) run.ok = false;
   } catch (err) {
     run.ok = false;
@@ -501,7 +505,7 @@ function saveRun_(run) {
   let log = [];
   try { log = JSON.parse(props.getProperty('SYNC_LOG') || '[]'); } catch (e) {}
   log.unshift({ at: run.at, by: run.by, ok: run.ok, added: run.added, completed: run.completed, updated: run.updated, failed: run.failed, error: run.error,
-                problems: run.users.filter(u => !u.ok).map(u => u.name) });
+                problems: run.users.filter(u => !u.ok).map(u => u.name), partial: run.partial || '', skipped: run.skipped || [] });
   props.setProperty('SYNC_LOG', JSON.stringify(log.slice(0, SYNC_LOG_MAX)));
 }
 
@@ -587,7 +591,7 @@ function writeNewRow_(sheet, row, item, link, source) {
   v[COL.source] = source;
   v[COL.added] = new Date();
   v[COL.brief] = briefOf_(item);
-  Object.keys(v).forEach(c => sheet.getRange(row, Number(c)).setValue(v[c]));
+  Object.keys(v).forEach(c => sheet.getRange(row, Number(c)).setValue(cellSafe_(v[c])));
 }
 
 // Owner = first assigned teammate (Team tab order) who is in capacity and not out on the due date
@@ -625,9 +629,19 @@ function refreshLinkedRows(newIds) {
   const tz = ss.getSpreadsheetTimeZone();
   const data = sheet.getRange(FIRST_ROW, 1, last - FIRST_ROW + 1, COL.replies).getValues();
   const iso = v => v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : '';
-  let checked = 0, completed = [], redated = [], reassigned = [], briefed = [], failed = [], typed = [], replied = [], extDelivered = [], gone = [];
+  let checked = 0, completed = [], redated = [], reassigned = [], briefed = [], failed = [], typed = [], replied = [], extDelivered = [], gone = [], skipped = [];
+  // Apps Script stops a run at 6 minutes. Stop checking rows at about 4.5 and pick up from there next time (rows are
+  // visited in a rotating order, so the tail of a long Planner isn't always the part that gets left out).
+  const t0 = typeof SYNC_STARTED_ === 'number' ? SYNC_STARTED_ : Date.now(), BUDGET = 240000;
+  const props0 = PropertiesService.getScriptProperties();
+  const startAt = Math.min(Number(props0.getProperty('REFRESH_OFFSET') || 0), Math.max(0, data.length - 1));
+  const order = data.map((x, k) => (k + startAt) % data.length);
+  let outOfTime = -1;
 
-  data.forEach((row, i) => {
+  order.forEach((i, n) => {
+    if (outOfTime !== -1) return;
+    if (Date.now() - t0 > BUDGET) { outOfTime = i; return; }
+    const row = data[i];
     const stage = row[COL.stage - 1];
     const ref = parseLink_(String(row[COL.link - 1]));
     if (!ref || SKIP_STAGES.indexOf(stage) !== -1 || !row[COL.deliverable - 1]) return;
@@ -644,8 +658,10 @@ function refreshLinkedRows(newIds) {
       return;
     }
     Utilities.sleep(250); // stay under Basecamp's rate limit
-    checked++;
     const r = FIRST_ROW + i;
+    // The snapshot was read minutes ago: if someone inserted, deleted or sorted rows since, this row isn't this item any more
+    if (String(sheet.getRange(r, COL.id).getValue()) !== String(id)) { skipped.push(id); return; }
+    checked++;
 
     if (!row[COL.type - 1]) {
       const guess = inferType_(row[COL.deliverable - 1]);
@@ -672,7 +688,7 @@ function refreshLinkedRows(newIds) {
 
     const assigned = assignedText_((item.assignees || []).map(a => a.name));
     if (assigned && assigned !== row[COL.assigned - 1]) {
-      sheet.getRange(r, COL.assigned).setValue(assigned);
+      sheet.getRange(r, COL.assigned).setValue(cellSafe_(assigned));
       if (!row[COL.owner - 1]) {
         const owner = pickOwner_(mapTeam_((item.assignees || []).map(a => a.name)), item.due_on);
         if (owner) sheet.getRange(r, COL.owner).setValue(owner);
@@ -684,7 +700,7 @@ function refreshLinkedRows(newIds) {
     if (brief && brief !== String(row[COL.brief - 1])) {
       const due = row[COL.due - 1] instanceof Date ? row[COL.due - 1] : new Date();
       const was = parseWbs_(String(row[COL.brief - 1] || ''), due), now = parseWbs_(brief, due);
-      sheet.getRange(r, COL.brief).setValue(brief);
+      sheet.getRange(r, COL.brief).setValue(cellSafe_(brief));
       briefed.push(id);
       const changes = now ? (was ? diffWbs_(was, now) : (row[COL.brief - 1] ? ['Work back schedule added to the brief'] : [])) : [];
       if (changes.length) {
@@ -740,7 +756,10 @@ function refreshLinkedRows(newIds) {
   catch (e) { /* running on the daily timer or from the dashboard – no pop-up */ }
   const updated = {};
   redated.concat(reassigned, briefed).forEach(id => { updated[id] = 1; });
-  return { checked: checked, completed: completed.length + extDelivered.length, updated: Object.keys(updated).length, failed: failed.length, gone: gone.length, replies: replied.length, ext: extDelivered };
+  // Where the next run starts: right where this one ran out of time, or the top after a full pass
+  props0.setProperty('REFRESH_OFFSET', String(outOfTime === -1 ? 0 : outOfTime));
+  const left = outOfTime === -1 ? 0 : order.length - order.indexOf(outOfTime);
+  return { left: left, skipped: skipped, checked: checked, completed: completed.length + extDelivered.length, updated: Object.keys(updated).length, failed: failed.length, gone: gone.length, replies: replied.length, ext: extDelivered };
 }
 
 // ===== Basecamp API =====
@@ -768,16 +787,29 @@ function fetchItem_(ref, preferred) {
   throw lastErr || new Error('not found');
 }
 
+// Text that starts with = + - @ would be read by Sheets as a formula; an apostrophe in front keeps it as text
+function cellSafe_(v) { return typeof v === 'string' && /^[=+\-@\t\r]/.test(v) ? "'" + v : v; }
+// GET with up to 3 tries: waits out 429 (Retry-After) and retries 5xx and network errors with a growing pause
+function fetchRetry_(url, opts) {
+  let res = null, err = null;
+  for (let k = 0; k < 3; k++) {
+    try {
+      res = UrlFetchApp.fetch(url, opts); err = null;
+      const code = res.getResponseCode();
+      if (code !== 429 && code < 500) return res;
+      const ra = Number((res.getHeaders() || {})['Retry-After']);
+      Utilities.sleep(Math.min(20, ra > 0 ? ra : Math.pow(2, k + 1)) * 1000);
+    } catch (e) { err = e; Utilities.sleep(Math.pow(2, k + 1) * 1000); }
+  }
+  if (err) throw err;
+  return res;
+}
 function apiGet_(service, url) {
   const opts = {
     headers: { Authorization: 'Bearer ' + service.getAccessToken(), 'User-Agent': userAgent_() },
     muteHttpExceptions: true
   };
-  let res = UrlFetchApp.fetch(url, opts);
-  if (res.getResponseCode() === 429) {
-    Utilities.sleep(Number(res.getHeaders()['Retry-After'] || 10) * 1000);
-    res = UrlFetchApp.fetch(url, opts);
-  }
+  const res = fetchRetry_(url, opts);
   const code = res.getResponseCode();
   if (code !== 200) throw new Error('HTTP ' + code + (code === 404 ? ' (not found or no access)' : ''));
   return JSON.parse(res.getContentText());
@@ -904,7 +936,7 @@ function addClient_(account, keyword) {
   }
   const empty = vals.findIndex(r => !String(r[0]).trim());
   if (empty === -1) return 'Other';   // the list is full (29 accounts); pick one by hand
-  ls.getRange(empty + 2, 1, 1, 2).setValues([[account, kw]]);
+  ls.getRange(empty + 2, 1, 1, 2).setValues([[cellSafe_(account), cellSafe_(kw)]]);
   return account;
 }
 // Rows still showing Other or a blank client: try again from their Basecamp project
@@ -967,9 +999,8 @@ function apiGetAll_(service, url) {
   const out = [];
   let next = url, guard = 0;
   while (next && guard++ < 20) {
-    const res = UrlFetchApp.fetch(next, { headers: { Authorization: 'Bearer ' + service.getAccessToken(), 'User-Agent': userAgent_() }, muteHttpExceptions: true });
+    const res = fetchRetry_(next, { headers: { Authorization: 'Bearer ' + service.getAccessToken(), 'User-Agent': userAgent_() }, muteHttpExceptions: true });
     const code = res.getResponseCode();
-    if (code === 429) { Utilities.sleep(Number(res.getHeaders()['Retry-After'] || 10) * 1000); guard--; continue; }
     if (code !== 200) throw new Error('HTTP ' + code);
     JSON.parse(res.getContentText()).forEach(x => out.push(x));
     const link = String(res.getHeaders()['Link'] || res.getHeaders()['link'] || '');
@@ -1294,6 +1325,22 @@ function digestData_() {
   const wkAgo = add(mon, -7);
   const delivered = deliveredIn_(d, P, wkAgo, mon);
 
+  // Alerts: what someone should act on this week (same red checks as the dashboard)
+  const alerts = [];
+  cap.forEach(r => { [['now', 'this week'], ['next', 'next week']].forEach(([k, l]) => { if (typeof r[k] === 'number' && r[k] > 100) alerts.push(r.name + ' is booked ' + r[k] + '% ' + l + '.'); }); });
+  m.items.filter(x => x.short && x.e && x.e >= T && x.e <= add(T, 28)).forEach(x => Object.keys(x.short).forEach(nm => alerts.push(x.src.title + ' (' + (x.src.account || 'Other') + '): ' + nm + ' is short ' + x.short[nm] + ' d before ' + fs(x.e) + '.')));
+  people.forEach(p => { const la = P(p.last); if (!la || la < T || la > add(T, 30)) return; const after = m.items.filter(x => x.team.indexOf(p.name) !== -1 && x.e && x.e > la).length; if (after) alerts.push(p.name + '\'s last day is ' + fs(la) + ' and ' + after + (after === 1 ? ' deliverable runs' : ' deliverables run') + ' past it. Hand them over.'); });
+  d.timeOff.filter(o => !o.half && P(o.start) && P(o.end) && P(o.start) >= T && P(o.start) <= add(T, 14) && m.wd(P(o.start), P(o.end)) >= 5 && !m.covers.some(c => c.from === o.name && +c.s === +P(o.start)))
+    .forEach(o => alerts.push(o.name + ' is out from ' + fs(P(o.start)) + ' with no cover named. Add "Coverage: Name" to the time off note.'));
+  // Planner health, one line
+  let health = '';
+  try {
+    const sy = syncStatus_(), L = sy.last, bad = (sy.conns || []).filter(c => c.status !== 'connected');
+    health = (L ? (L.ok ? 'Basecamp sync OK' : '⚠️ Basecamp sync had problems') + ' (last run ' + Utilities.formatDate(new Date(L.at), tz, 'EEE h:mm a') + ')' : '⚠️ Basecamp sync hasn\'t run') +
+      ' · ' + ((sy.conns || []).length - bad.length) + ' of ' + (sy.conns || []).length + ' Basecamp connections working' +
+      (bad.length ? ' · ' + bad.map(c => c.member || c.bcName).join(', ') + ' need' + (bad.length === 1 ? 's' : '') + ' to reconnect (Settings)' : '');
+  } catch (e) { health = ''; }
+
   // Long leave with named cover, happening now: "who to ask"
   const away = m.covers.filter(c => c.s <= sun && c.e >= T && m.wd(c.s, c.e) >= 5).map(c => ({ from: c.from, to: c.to, until: c.e, back: nextWd(c.e) }));
 
@@ -1324,7 +1371,7 @@ function digestData_() {
   const quote = DIGEST_QUOTES[Math.floor((mon - new Date(2024, 0, 1)) / (7 * 864e5)) % DIGEST_QUOTES.length];
   const last = d.sync && d.sync.last;
   const subject = 'Insights week of ' + fs(mon) + ': ' + due.length + ' due';
-  return { tz, mon, f, fs, teamOf, quote, cal, due, active, upcoming, cap, P, delivered, away, tldr, outWk, syncBad: last && !last.ok, subject, url: dashboardUrl_() };
+  return { tz, mon, f, fs, teamOf, quote, cal, due, active, upcoming, cap, P, delivered, away, tldr, outWk, syncBad: last && !last.ok, alerts, health, subject, url: dashboardUrl_() };
 }
 
 function sendDigest_(to, preview) {
@@ -1411,6 +1458,8 @@ function digestBasecampHtml_(g, preview, tags) {
     '<div><br><strong>TL;DR</strong></div>' + ul(g.tldr.map(esc_)) +
     g.away.map(a => '<div><br>🌴 <strong>' + esc_(a.from) + '</strong> is out until ' + g.f(a.until) + ' (back ' + g.fs(a.back) + '). Questions go to ' + tag(a.to) + '.</div>').join('') +
 
+    (g.alerts && g.alerts.length ? head('⚠️', 'Needs attention (' + g.alerts.length + ')') + ul(g.alerts.map(esc_)) : '') +
+
     head('🗓️', 'Who\'s in and out') +
     (calBlocks.length ? calBlocks.map(b => '<div><em>' + b[0] + '</em></div>' + ul(b[1])).join('') : none('Everyone\'s in this week, and nothing coming up.')) +
 
@@ -1439,7 +1488,7 @@ function digestBasecampHtml_(g, preview, tags) {
     '<div>🟢 has room (under 70%) · 🟡 near full (70–100%) · 🔴 over capacity · ⚪ out</div>' +
     '<div><em>Capacity is an estimate: each deliverable\'s estimated days, split by role and spread over its work dates, against each person\'s billable time after PTO and holidays. Use it as a guide, not a timesheet.</em></div>' +
 
-    (g.syncBad ? '<div><br>⚠️ The last Basecamp sync had problems. Check Settings on the dashboard.</div>' : '') +
+    (g.health ? '<div><br><em>Planner health: ' + esc_(g.health) + '</em></div>' : g.syncBad ? '<div><br>⚠️ The last Basecamp sync had problems. Check Settings on the dashboard.</div>' : '') +
     '<div><br><a href="' + esc_(g.url) + '">Open the planner</a></div></div>';
 }
 
@@ -1652,7 +1701,7 @@ function activitySheet_() {
 }
 function logActivity_(type, id, title, who, text, link, when) {
   try {
-    activitySheet_().appendRow([when ? new Date(when) : new Date(), type, id || '', title || '', who || '', String(text || '').slice(0, 1000), link || '']);
+    activitySheet_().appendRow([when ? new Date(when) : new Date(), type, id || '', cellSafe_(title || ''), cellSafe_(who || ''), cellSafe_(String(text || '').slice(0, 1000)), link || '']);
   } catch (e) { console.log('Activity log failed: ' + e.message); }
 }
 function trimActivity_() {
@@ -1832,7 +1881,7 @@ function pollReplies(e) {
       let newest = since, url = 'https://3.basecampapi.com/' + BC_ACCOUNT_ID + '/projects/recordings.json?type=Comment&sort=created_at&direction=desc', pages = 0;
       try {
         while (url && pages++ < 3) {
-          const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + c.service.getAccessToken(), 'User-Agent': userAgent_() }, muteHttpExceptions: true });
+          const res = fetchRetry_(url, { headers: { Authorization: 'Bearer ' + c.service.getAccessToken(), 'User-Agent': userAgent_() }, muteHttpExceptions: true });
           if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode());
           const list = JSON.parse(res.getContentText());
           let older = false;
@@ -1964,7 +2013,7 @@ function generateRecurring_() {
       v[COL.source] = RECURRING_SOURCE;
       v[COL.added] = new Date();
       v[COL.booking] = 'Tentative';
-      Object.keys(v).forEach(c => sheet.getRange(r, Number(c)).setValue(v[c]));
+      Object.keys(v).forEach(c => sheet.getRange(r, Number(c)).setValue(cellSafe_(v[c])));
       const newRow = []; newRow[COL.client - 1] = s.account; newRow[COL.type - 1] = s.type; newRow[COL.deliverable - 1] = v[COL.deliverable];
       newRow[COL.stage - 1] = NEW_STAGE; newRow[COL.due - 1] = p.due; newRow[COL.notes - 1] = v[COL.notes]; newRow[COL.source - 1] = RECURRING_SOURCE; newRow[COL.id - 1] = v[COL.id];
       rows[r - FIRST_ROW] = newRow;
@@ -2123,7 +2172,7 @@ function logToTracker_() {
       const type = (TRACKER_TYPES.find(t => t[0].test(typeName + ' ' + title)) || [null, 'Ad-hoc'])[1];
       const link = String(row[COL.link - 1] || '');
       const note = 'Auto-logged by the Insights planner (' + row[COL.id - 1] + ')' + (link ? ' from Basecamp: ' + link : '') + '. Add the report and dataset links.';
-      tab.appendRow([q, year, tgt.client, type, lead, title, '', '', note, '', '', ext, '', '']);
+      tab.appendRow([q, year, tgt.client, type, lead, cellSafe_(title), '', '', cellSafe_(note), '', '', ext, '', '']);
       titlesCache[key].push(year + '|' + title.toLowerCase());
       logActivity_('tracker', row[COL.id - 1], title, 'Planner', 'Logged to the tracker (' + tab.getName() + ' tab)' + (ext ? ' with ' + ext : '') + '. Add the report link there.', link);
       n++;
@@ -2315,6 +2364,7 @@ function teamModel_(d) {
       });
       if (carry > 1e-6 && last && last < end) carry = fill(add(last, 1), end, carry);
       if (carry > 1e-6) {
+        if (carry > 0.05) { x.short = x.short || {}; x.short[nm] = Math.round(carry * 10) / 10; }
         const ds = [];
         for (let y = maxD(first || x.s, T); y <= end; y = add(y, 1)) { const cv = coverOn(nm, y), w = cv && !onX(cv) ? cv : nm; if (dayCap(w, y) > 0) ds.push([y, w]); }
         if (!ds.length) for (let y = maxD(first || x.s, T); y <= end; y = add(y, 1)) if (isWd(y)) ds.push([y, nm]);
