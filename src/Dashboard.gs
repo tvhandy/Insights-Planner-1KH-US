@@ -217,6 +217,7 @@ function setBooking(row, id, booking) {
 
 // Bulk clean-up: one stage for many rows
 function setStages(list, stage) {
+  requireAdmin_();
   const allowed = ['Delivered', 'Dismissed', 'Not started', 'On hold'];
   if (allowed.indexOf(stage) === -1) throw new Error('Not a bulk stage: ' + stage);
   const done = [];
@@ -298,6 +299,8 @@ function deleteTimeOff(id) {
   try {
     const sh = timeOffSheet_(), r = timeOffRow_(sh, id);
     const v = sh.getRange(r, 1, 1, 6).getValues()[0];
+    const mine = String(v[1]) === String(matchTeamName_(displayName_()) || displayName_());
+    if (!mine) requireAdmin_();   // your own time off, or an admin for anyone's
     sh.deleteRow(r);
     logActivity_('timeoff', id, v[1] + ' · ' + v[4], displayName_(), 'Removed ' + String(v[4]).toLowerCase() + ': ' + timeOffRange_({ start: v[2], end: v[3] }), '');
     return id;
@@ -367,6 +370,7 @@ function sendFeedback(f) {
 
 // Estimate check: write a new day range for a deliverable type to the Lists tab
 function applyTypeRange(type, min, max) {
+  requireAdmin_();
   const ls = ss_().getSheetByName('Lists');
   const names = ls.getRange('D2:D30').getValues().map(r => String(r[0]).trim());
   const k = names.indexOf(String(type).trim());
@@ -561,6 +565,7 @@ function deletePlanDraft(id) {
 // Writes a plan to the Planner only (Basecamp is untouched). changes: [{ row, id, title, fields: { split, est, planStart, planIR, planDue, reviewer, clientDate }, summary }]
 // newItems: Planning bookings (same shape as bookWork) for pipeline work pencilled in from the plan
 function applyPlan(changes, newItems, draftId) {
+  requireAdmin_();
   const P = s => { const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2], 12); };
   const COLS = { split: 27, est: 7, clientDate: 33, planStart: 34, planIR: 35, planDue: 36, reviewer: 37 };
   let n = 0;
@@ -715,7 +720,8 @@ function syncStatus_() {
     hours: SYNC_HOURS, connectUrl: connectUrl, redirectUrl: (function () { try { return redirectUrl_(); } catch (e) { return ''; } })(), legacy: legacy,
     poll: readProp_('POLL_LAST'), backupLast: readProp_('BACKUP_LAST'),
     digest: { to: (function () { try { return digestRecipients_(); } catch (e) { return []; } })(), last: readProp_('DIGEST_LAST'), hour: DIGEST_HOUR, fixed: !!PropertiesService.getScriptProperties().getProperty('DIGEST_TO'), project: digestProject_() },
-    me: { email: meEmail, connected: !!mine && mine.status !== 'reconnect', name: displayName_() }
+    me: { email: meEmail, connected: !!mine && mine.status !== 'reconnect', name: displayName_(), admin: isAdmin_() },
+    admins: admins_(), alertTo: alertRecipients_(null), alertState: readProp_('ALERT_STATE')
   };
 }
 
@@ -737,6 +743,7 @@ function disconnectMine() {
 
 // Moves the twice-daily sync (and the paste-a-link handler) to the person clicking
 function takeOverSync() {
+  requireAdmin_();
   setup();
   return syncStatus_();
 }

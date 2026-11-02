@@ -970,7 +970,7 @@ function settings(d, T) {
     ${ownerOff.length ? `<div class="callout warn"><b>${esc(owner.name)} is out ${esc(fmt(ownerOff[0].s))} – ${esc(fmt(ownerOff[0].e))}.</b> The sync keeps running unless their Google account is suspended. If syncs stop, someone who's here should take it over.</div>` : ''}
     ${ownerGone ? `<div class="callout warn"><b>${esc(owner.name)}'s last day is ${esc(fmt(ownerMember.lastD))}.</b> Move the sync to someone staying before then.</div>` : ''}
     <div class="callout info">The scheduled sync and the paste-a-link helper run from one person's Google account. Taking it over moves both to you; the old account stands down automatically.</div>
-    ${iAmOwner ? '' : `<div class="row"><button class="btn ghost" data-act="takeover">${S.confirm === 'takeover' ? 'Click again to confirm' : 'Run it from my account'}</button></div>`}
+    ${iAmOwner ? '' : !isAdminMe() ? '<span class="sub">An admin can move the sync to their account (Who can do what, below).</span>' : `<div class="row"><button class="btn ghost" data-act="takeover">${S.confirm === 'takeover' ? 'Click again to confirm' : 'Run it from my account'}</button></div>`}
   </section>`;
 
   // Team connections
@@ -1016,11 +1016,21 @@ function settings(d, T) {
     ${dg.fixed ? `<div class="kv"><span class="k">Also emailed to</span><span style="font-size:13px">${dg.to.map(esc).join(', ')} <span class="sub">(set by DIGEST_TO)</span></span></div>` : ''}
     <div class="kv"><span class="k">Last posted</span><span style="font-size:13px">${dg.last ? esc(whenLabel(dg.last.at, T)) + (dg.last.post && dg.last.post.url ? ` · <a href="${esc(dg.last.post.url)}" target="_blank" rel="noopener">Open</a>` : '') : 'Not yet'}</span></div>
     <div class="row"><button class="btn ghost" data-act="digest-bc">Post a preview to Basecamp</button><span class="sub" id="digMsg"></span></div>
+    <div class="kv"><span class="k">Sync alerts</span><span style="font-size:13px">Email to ${(sy.alertTo || []).length ? sy.alertTo.map(esc).join(', ') : 'no one yet'}, again every 3 days while broken. A Hub Campfire post if it's still broken after a day, and an all-clear once fixed.${sy.alertState ? ` <span class="stat bad">Broken since ${esc(whenLabel(sy.alertState.since, T))}</span>` : ''}</span></div>
+    ${isAdminMe() ? `<div class="row"><button class="btn ghost" data-act="test-alert">Send a test alert email</button><span class="sub">Add more addresses with the ALERT_TO script property (e.g. a deputy's personal email).</span></div>` : ''}
+  </section>`;
+  const adminCard = `<section class="card">
+    <div class="row between"><h2>Who can do what</h2><span class="stat ${isAdminMe() ? 'ok' : 'off'}">${isAdminMe() ? 'You\'re an admin' : 'Viewer and editor'}</span></div>
+    <p class="sub" style="margin:0;font-size:14px;line-height:1.5">Everyone with access to the Sheet can update deliverables, notes, splits, dates and their own time off, and save and share planning drafts. Admins can also apply drafts to the planner, take over the daily sync, clean up stages in bulk, change a type's day range, and delete anyone's time off.</p>
+    <div style="display:flex;flex-direction:column;gap:6px">${(Array.isArray(sy.admins) ? sy.admins : []).map(a => `<div class="li"><span class="main"><span>${esc(a)}</span></span>${isAdminMe() && (sy.admins || []).length > 1 && a !== String(sy.me && sy.me.email || '').toLowerCase() ? `<button class="pill" data-act="admin-rm" data-email="${esc(a)}">${S.confirm === 'adm-' + a ? 'Click to remove' : 'Remove'}</button>` : ''}</div>`).join('')}</div>
+    ${isAdminMe() ? `<div class="row"><input class="sel" id="adminAdd" type="email" placeholder="name@1000heads.com" style="width:240px"><button class="btn ghost" data-act="admin-add">Add admin</button></div>` : ''}
   </section>`;
   const versionLine = `<p class="sub" style="margin:4px 0 0">Planner code version ${esc(d.version || 'unknown')}. Each release is saved in Drive › Insights planner code, with what changed in the Changelog doc there.</p>`;
-  return `<div class="sgrid">${you}${syncCard}</div>${teamCard}<div class="sgrid">${ownerCard}${digestCard}</div><div class="sgrid">${help}</div>${logCard}${versionLine}`;
+  return `<div class="sgrid">${you}${syncCard}</div>${teamCard}<div class="sgrid">${ownerCard}${digestCard}</div><div class="sgrid">${adminCard}${help}</div>${logCard}${versionLine}`;
 }
 
+// Admins can take over the sync, apply planning drafts, clean up in bulk, change type ranges and delete anyone's time off
+const isAdminMe = () => !!(S.data && S.data.sync && S.data.sync.me && S.data.sync.me.admin);
 /* ===== My work: one person's week ===== */
 function myWork(d, T) {
   const me = S.me && d.people.find(p => p.name === S.me) ? S.me : d.meTeam;
@@ -1123,7 +1133,7 @@ function forecast(d, T) {
     const same = sug && now && sug[0] === now[0] && sug[1] === now[1];
     return `<tr><td>${esc(k)}</td><td>${L.length}</td><td>${ae.toFixed(1)} d</td><td>${aa.toFixed(1)} d</td><td style="font-weight:700;color:${r > 1.15 ? '#B91C1C' : r < 0.85 ? '#1E40AF' : '#047857'}">${Math.round(r * 100)}%</td>
       <td>${now ? now[0] + '–' + now[1] + ' d' : '—'}</td>
-      <td>${!sug ? '<span class="sub">Needs 3 or more</span>' : same ? '<span class="sub">Matches</span>' : `<span class="row" style="gap:6px;flex-wrap:nowrap">${sug[0]}–${sug[1]} d <button class="pill" data-act="apply-range" data-type="${esc(k)}" data-min="${sug[0]}" data-max="${sug[1]}">Apply</button></span>`}</td></tr>`; }).join('')}</tbody></table></div><span class="sub">Apply writes the new range to the Lists tab. Every row of that Type without Override days re-estimates on the next load.</span>` : '<div class="empty">Fills in as people record actual days when work moves to Delivered.</div>';
+      <td>${!sug ? '<span class="sub">Needs 3 or more</span>' : same ? '<span class="sub">Matches</span>' : `<span class="row" style="gap:6px;flex-wrap:nowrap">${sug[0]}–${sug[1]} d ${isAdminMe() ? `<button class="pill" data-act="apply-range" data-type="${esc(k)}" data-min="${sug[0]}" data-max="${sug[1]}">Apply</button>` : ''}</span>`}</td></tr>`; }).join('')}</tbody></table></div><span class="sub">Apply writes the new range to the Lists tab. Every row of that Type without Override days re-estimates on the next load.</span>` : '<div class="empty">Fills in as people record actual days when work moves to Delivered.</div>';
 
   return `<section class="card"><div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Capacity forecast</h2><span class="sub">Team days per week, Mon–Fri, after billable %, time off and holidays</span></div>
       <div class="row"><label class="sub">Weeks <select id="fcWeeks" style="min-height:34px;border:1px solid #CBD5E1;border-radius:8px;font:inherit">${[8, 13, 26].map(n => `<option ${n === nW ? 'selected' : ''} value="${n}">${n}</option>`).join('')}</select></label>
@@ -1221,7 +1231,7 @@ const FAQ = [
     ['Timeline changes', 'A changed WBS, a moved due date, or a reply mentioning new timing with a date flags the card "Timeline changed" for 14 days.'],
     ['Logging to the deliverables tracker', 'Deliveries (with an EXT file or a real Type) get a row on the right client tab of the Centralized Insights Deliverables Tracker. Add the report and dataset links there.'],
     ['Old to-dos expire', 'Open rows due more than 30 days ago move to Dismissed with a note. Set one back to a stage if it\'s still live.'],
-    ['Team posts', 'Monday 8am digest on the 1KH Insights US Hub Message Board, Wednesday 10am check-in and Friday 5pm wrap in its Campfire.'],
+    ['Team posts', 'Monday 8am digest on the 1KH Insights US Hub Message Board (archived after 3 weeks) and the Wednesday 10am check-in in its Campfire. The Friday wrap is retired.'],
     ['Backup sync', 'Every connected account checks every 2 hours and runs the sync or a missed post if the main schedule didn\'t, so the planner never depends on one person.']
   ]],
   ['Troubleshooting', [
@@ -1663,7 +1673,7 @@ function overview(d, T, H, hz, x) {
       ${tlChanged.length ? `<span style="font-size:12px;font-weight:700;color:var(--soft)">Timeline changes</span>` + tlChanged.slice(0, 5).map(i => `<button class="li" data-open="${esc(i.id)}"><span class="main"><span>${esc(i.title)}</span><span class="sub">${esc((i.tlFlag.changes || [])[0] || '')}</span></span></button>`).join('') : ''}
       ${handover.length ? `<span style="font-size:12px;font-weight:700;color:var(--soft)">Hand these over</span>` + handover.slice(0, 6).map(i => `<button class="li" data-open="${esc(i.id)}"><span class="main"><span>${esc(i.title)}</span><span class="sub">${i.leavers.map(n => esc(n) + ' leaves ' + fmt(d.people.find(p => p.name === n).lastD)).join(', ')} · ends ${fmt(i.e)}</span></span></button>`).join('') : ''}
       ${dups.length ? `<span style="font-size:12px;font-weight:700;color:var(--soft)">Possible duplicates</span>` + dups.filter(i => i.dupOf.every(o => o > i.id)).slice(0, 5).map(i => `<button class="li" data-open="${esc(i.id)}"><span class="main"><span>${esc(i.title)}</span><span class="sub">${i.id} and ${i.dupOf.join(', ')}</span></span></button>`).join('') : ''}
-      <div class="row"><button class="btn ghost" data-act="bulk">Clean up in bulk</button><a href="${esc(d.sheetUrl)}" target="_blank" rel="noopener" style="font-size:12px;font-weight:700;text-decoration:none">Fix these in the Planner →</a></div>
+      <div class="row">${isAdminMe() ? '<button class="btn ghost" data-act="bulk">Clean up in bulk</button>' : ''}<a href="${esc(d.sheetUrl)}" target="_blank" rel="noopener" style="font-size:12px;font-weight:700;text-decoration:none">Fix these in the Planner →</a></div>
     </div>
     <div class="card"><div class="row between"><h3>Who's out</h3><span class="sub">Next 6 weeks</span></div>
       ${out.length ? out.map(o => `<div class="li"><span class="chip" style="${o.badge === 'Holiday' ? 'background:#EEF0F3;color:#374151' : 'background:#FEF3C7;color:#92400E'}">${esc(o.badge)}</span><span class="main"><span>${esc(o.who)}</span><span class="sub">${esc(o.when)}</span></span></div>`).join('') : '<div class="empty">Nobody is out in the next 6 weeks.</div>'}
@@ -1782,7 +1792,7 @@ function board(d, T) {
   const seg = (k, opts) => `<span class="bseg">${opts.map(([v, l]) => `<button class="${S[k] === v ? 'on' : ''}" data-bset="${k}" data-v="${v}">${l}</button>`).join('')}</span>`;
   return `<div style="display:flex;flex-direction:column;gap:12px">
     <div class="row between"><div style="display:flex;flex-direction:column;gap:2px"><h2>Deliverables by stage</h2><span class="sub">Drag a card to change its stage. Delivered shows the last 14 days.${stuckN ? ` <b style="color:#B45309">${stuckN} stuck over 7 days in review or blocked.</b>` : ''}</span></div>
-      <div class="row"><button class="pill ${S.showTriage ? 'on' : ''}" data-triage="1">${S.showTriage ? 'Hide' : 'Show'} Needs triage (${triageN})</button><button class="pill" data-act="bulk">Clean up in bulk</button></div></div>
+      <div class="row"><button class="pill ${S.showTriage ? 'on' : ''}" data-triage="1">${S.showTriage ? 'Hide' : 'Show'} Needs triage (${triageN})</button>${isAdminMe() ? '<button class="pill" data-act="bulk">Clean up in bulk</button>' : ''}</div></div>
     <div class="row btools">
       <span class="lbl">Group</span>${seg('boardGroup', [['none', 'None'], ['person', 'Person'], ['client', 'Client']])}
       <span class="lbl">Due</span>${seg('bTiming', [['all', 'Any'], ['overdue', 'Overdue'], ['week', 'This week'], ['next', 'Next week']])}
@@ -2114,7 +2124,7 @@ function renderLayer() {
         <div class="row between"><h2>Send feedback</h2><button type="button" class="x" aria-label="Close" data-close="1">${I.close}</button></div>
         <span class="sub">What's confusing, wrong or missing? Mention what you were doing. It's saved for whoever looks after the planner, with your name and the tab you were on (${esc(S.feedback.tabLabel)}).</span>
         <label class="f">Your feedback<textarea name="text" rows="5" required style="font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;resize:vertical" placeholder="e.g. My capacity shows 0% this week but I have two reports due"></textarea></label>
-        <label class="sub" style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="share" style="accent-color:var(--accent)"> Also post it in the 1KH Insights US Hub Campfire</label>
+        ${S.data && S.data.sync && S.data.sync.me && S.data.sync.me.connected ? `<label class="sub" style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="share" style="accent-color:var(--accent)"> Also post it in the 1KH Insights US Hub Campfire</label>` : `<span class="sub">To also post it in the Hub Campfire, <button class="alink" data-act="goto-settings">connect your Basecamp</button> first. Posts go out under your own name.</span>`}
         <div class="row"><button class="btn primary" type="submit">Send</button><span id="fbMsg" class="sub"></span></div>
       </form></div>`;
     return;
@@ -2160,7 +2170,7 @@ function renderLayer() {
         <div style="border-top:1px solid var(--line2);padding-top:12px;display:flex;flex-direction:column;gap:6px">
           <div class="row between"><h3>Current and upcoming</h3><span class="sub">${d.summerFridays ? 'Summer Fridays are counted automatically' : ''}</span></div>
           ${list.length ? list.map(o => `<div class="li"><span class="chip" style="background:#FEF3C7;color:#92400E">${esc(o.type)}</span><span class="main"><span>${esc(o.name)}</span><span class="sub">${esc(when(o))}${coverFrom(o.note, d.team, o.name) ? ' · ' + esc(coverFrom(o.note, d.team, o.name)) + ' covering' : ''}</span></span>
-            <span class="row" style="gap:4px;flex-wrap:nowrap"><button class="pill" data-act="to-edit" data-id="${esc(o.id)}">Edit</button><button class="pill" data-act="to-del" data-id="${esc(o.id)}">${S.confirm === 'to-' + o.id ? 'Click to delete' : 'Delete'}</button></span></div>`).join('') : '<div class="empty">No time off logged.</div>'}
+            <span class="row" style="gap:4px;flex-wrap:nowrap"><button class="pill" data-act="to-edit" data-id="${esc(o.id)}">Edit</button>${isAdminMe() || o.name === d.meTeam ? `<button class="pill" data-act="to-del" data-id="${esc(o.id)}">${S.confirm === 'to-' + o.id ? 'Click to delete' : 'Delete'}</button>` : ''}</span></div>`).join('') : '<div class="empty">No time off logged.</div>'}
           <span class="sub">Saved to the Time off tab in the Sheet. Company holidays are on the Team tab.</span>
         </div>
       </div></div>`;
@@ -2418,6 +2428,19 @@ document.addEventListener('click', e => {
       .setPlanFields(item.row, item.id, { planStart: ed.s, planIR: ed.ir, planDue: ed.e });
   }
   else if (el.dataset.act === 'copy-wbs') { const t = S.wbsCopy || ''; try { navigator.clipboard.writeText(t).then(() => toast('WBS copied'), () => toast('Select the WBS and copy it')); } catch (e) { toast('Select the WBS and copy it'); } }
+  else if (el.dataset.act === 'admin-add' || el.dataset.act === 'admin-rm') {
+    const cur = (S.data.sync.admins || []).slice();
+    let next;
+    if (el.dataset.act === 'admin-add') { const v = ((document.getElementById('adminAdd') || {}).value || '').trim().toLowerCase(); if (!/^[^@\s]+@[^@\s]+\.[a-z]+$/.test(v)) { toast('Enter an email address'); return; } next = cur.concat([v]); }
+    else { const k = 'adm-' + el.dataset.email; if (S.confirm !== k) { S.confirm = k; render(); setTimeout(() => { if (S.confirm === k) { S.confirm = null; render(); } }, 4000); return; } S.confirm = null; next = cur.filter(x => x !== el.dataset.email); }
+    el.disabled = true;
+    google.script.run.withSuccessHandler(list => { S.data.sync.admins = Array.isArray(list) ? list : next; toast('Admins updated'); render(); }).withFailureHandler(err => { el.disabled = false; toast(err.message); }).setAdmins(next);
+  }
+  else if (el.dataset.act === 'test-alert') {
+    el.disabled = true;
+    google.script.run.withSuccessHandler(to => { el.disabled = false; toast('Test alert sent to ' + to.join(', ')); }).withFailureHandler(err => { el.disabled = false; toast(err.message); }).testSyncAlert();
+  }
+  else if (el.dataset.act === 'goto-settings') { S.feedback = null; S.detail = null; S.tab = 'settings'; render(); }
   else if (el.dataset.act === 'past-toggle') { S.pastOpen[el.dataset.k] = !S.pastOpen[el.dataset.k]; render(); }
   else if (el.dataset.act === 'dates-edit') { S.datesEdit = S.datesEdit === el.dataset.id ? null : el.dataset.id; renderLayer(); }
   else if (el.dataset.act === 'clear-plan') {
@@ -2869,7 +2892,7 @@ function planTab(d, T) {
           <button class="btn ghost" data-pl="save">Save draft</button>
           <button class="btn ghost" data-pl="share">Share</button>
           <button class="btn ghost" data-pl="discard">${P0.confirm === 'discard' ? 'Click again to discard' : P0.draft.id ? 'Close' : 'Discard'}</button>
-          <button class="btn primary" data-pl="apply" ${changes.length ? '' : 'disabled'}>${P0.confirm === 'apply' ? 'Click again to apply' : 'Apply to planner' + (changes.length ? ' (' + changes.length + ')' : '')}</button>`
+          ${isAdminMe() ? `<button class="btn primary" data-pl="apply" ${changes.length ? '' : 'disabled'}>${P0.confirm === 'apply' ? 'Click again to apply' : 'Apply to planner' + (changes.length ? ' (' + changes.length + ')' : '')}</button>` : `<button class="btn primary" data-pl="share" ${changes.length ? '' : 'disabled'} title="Only an admin can apply a draft to the planner">Share with an admin</button>`}`
         : `<button class="btn ghost" data-pl="drafts" aria-expanded="${!!P0.draftsOpen}">Drafts${P0.drafts && P0.drafts.length ? ' · ' + P0.drafts.length : ''}</button>`}
         <button class="btn ghost" data-pl="export">Export</button>
         <button class="btn ${draft ? 'ghost' : 'primary'}" data-pl="fitnew">${I.plus}Add work</button>

@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.11.02.6';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.11.02.7';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -234,6 +234,26 @@ function showConnections() {
   SpreadsheetApp.getUi().alert("Basecamp connections", list || 'Nobody is connected yet.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
+// ===== Planner admins =====
+// High-impact actions (take over the sync, apply a planning draft, bulk stage changes, change a type's day range,
+// delete someone else's time off) are for admins only. ADMINS script property, comma-separated emails; until it's set,
+// Tom (CONTACT) and whoever runs the sync are admins. Admins can add and remove admins on the Settings tab.
+function admins_() {
+  const v = String(PropertiesService.getScriptProperties().getProperty('ADMINS') || '').toLowerCase().split(/[,;\s]+/).filter(x => /@/.test(x));
+  if (v.length) return v;
+  const out = [CONTACT.toLowerCase()];
+  try { const o = JSON.parse(PropertiesService.getScriptProperties().getProperty('SYNC_OWNER') || 'null'); if (o && o.email && out.indexOf(String(o.email).toLowerCase()) === -1) out.push(String(o.email).toLowerCase()); } catch (e) {}
+  return out;
+}
+function isAdmin_() { return admins_().indexOf(String(currentEmail_()).toLowerCase()) !== -1; }
+function requireAdmin_() { if (!isAdmin_()) throw new Error('Only a planner admin can do this. Ask ' + admins_().map(e => e.split('@')[0].replace(/[._]/g, ' ')).join(' or ') + '.'); }
+function setAdmins(list) {
+  requireAdmin_();
+  const clean = (list || []).map(x => String(x).trim().toLowerCase()).filter(x => /^[^@\s]+@[^@\s]+\.[a-z]+$/.test(x)).filter((x, k, a) => a.indexOf(x) === k);
+  if (clean.indexOf(String(currentEmail_()).toLowerCase()) === -1) throw new Error('Keep yourself on the list, or ask another admin to remove you.');
+  PropertiesService.getScriptProperties().setProperty('ADMINS', clean.join(','));
+  return clean;
+}
 function userAgent_() { return '1000heads Insights Planner (' + CONTACT + ')'; }
 
 // ===== One-time setup: triggers =====
@@ -471,8 +491,7 @@ function runSync_(by) {
   }
   run.seconds = Math.round((Date.now() - started) / 1000);
   saveRun_(run);
-  // Email only when things go from fine to broken, so a lasting problem doesn't send an alert twice a day
-  if (!run.ok && (!prev || prev.ok)) { try { sendSyncAlert_(run); } catch (e) { console.log('Alert failed: ' + e.message); } }
+  try { syncAlerts_(run); } catch (e) { console.log('Alert failed: ' + e.message); }
   return run;
 }
 
@@ -1007,14 +1026,57 @@ function mailButton_(url, label) {
 function esc_(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // Tells the people whose connection broke, plus whoever runs the sync
-function sendSyncAlert_(run) {
+// Sync alerts: email when the sync breaks (again every 3 days while it stays broken), a Campfire post if it's still
+// broken after a day (email to @1000heads.com can be quarantined), and an all-clear in Campfire once it's fixed.
+// ALERT_TO (script property, comma-separated) adds addresses that always get the email, e.g. the deputy's.
+const ALERT_CAMPFIRE_AFTER_H = 24, ALERT_REMIND_DAYS = 3;
+function syncAlerts_(run) {
+  const props = PropertiesService.getScriptProperties();
+  let st = null; try { st = JSON.parse(props.getProperty('ALERT_STATE') || 'null'); } catch (e) {}
+  const now = Date.now();
+  if (run.ok) {
+    if (st && st.campfire) { try { campfirePost_('✅ The planner\'s Basecamp sync is working again.', true); } catch (e) { console.log('All-clear post failed: ' + e.message); } }
+    if (st) props.deleteProperty('ALERT_STATE');
+    return;
+  }
+  st = st || { since: new Date(now).toISOString(), emailed: '', campfire: '' };
+  if (!st.emailed || now - new Date(st.emailed).getTime() >= ALERT_REMIND_DAYS * 864e5) {
+    try { sendSyncAlert_(run); st.emailed = new Date(now).toISOString(); } catch (e) { console.log('Alert email failed: ' + e.message); }
+  }
+  if (!st.campfire && now - new Date(st.since).getTime() >= ALERT_CAMPFIRE_AFTER_H * 36e5) {
+    try {
+      const who = (run.users || []).filter(u => !u.ok).map(u => u.name);
+      campfirePost_('⚠️ The planner\'s Basecamp sync has needed attention since ' + Utilities.formatDate(new Date(st.since), ss_().getSpreadsheetTimeZone(), 'EEE MMM d') + '. ' +
+        (who.length ? who.join(', ') + (who.length === 1 ? ' needs' : ' need') + ' to reconnect: dashboard › Settings › Reconnect my Basecamp.' : 'Open the dashboard › Settings for details.') + ' New Basecamp to-dos may be missing until then.', true);
+      st.campfire = new Date(now).toISOString();
+    } catch (e) { console.log('Alert post failed: ' + e.message); }
+  }
+  props.setProperty('ALERT_STATE', JSON.stringify(st));
+}
+function alertRecipients_(run) {
   const reg = registry_();
   let owner = null;
   try { owner = JSON.parse(PropertiesService.getScriptProperties().getProperty('SYNC_OWNER') || 'null'); } catch (e) {}
   const to = [];
-  const add = e => { e = String(e || '').toLowerCase(); if (/@/.test(e) && to.indexOf(e) === -1) to.push(e); };
-  (run.users || []).filter(u => !u.ok).forEach(u => add(reg[u.key] && reg[u.key].email));
+  const add = e => { e = String(e || '').trim().toLowerCase(); if (/@/.test(e) && to.indexOf(e) === -1) to.push(e); };
+  ((run && run.users) || []).filter(u => !u.ok).forEach(u => add(reg[u.key] && reg[u.key].email));
   if (owner) add(owner.email);
+  String(PropertiesService.getScriptProperties().getProperty('ALERT_TO') || '').split(/[,;\s]+/).forEach(add);
+  return to;
+}
+// Settings › Test alert: emails the alert list (no Campfire post)
+function testSyncAlert() {
+  requireAdmin_();
+  const to = alertRecipients_(null);
+  if (!to.length) throw new Error('No one to alert yet. Add ALERT_TO or set a sync owner.');
+  MailApp.sendEmail({ to: to.join(','), subject: 'Insights planner: test alert', htmlBody: '<div style="' + MAIL_CSS_ + '"><p>This is a test of the planner\'s sync alerts. If the Basecamp sync breaks, this address gets an email, and the Hub Campfire gets a post if it\'s still broken after a day.</p></div>', name: 'Insights planner' });
+  return to;
+}
+function sendSyncAlert_(run) {
+  const reg = registry_();
+  let owner = null;
+  try { owner = JSON.parse(PropertiesService.getScriptProperties().getProperty('SYNC_OWNER') || 'null'); } catch (e) {}
+  const to = alertRecipients_(run);
   if (!to.length) return;
   const problems = (run.users || []).filter(u => !u.ok).map(u => '<li><b>' + esc_(u.name) + '</b>: ' + esc_(u.error || 'could not read assignments') + '</li>').join('');
   const html = '<div style="' + MAIL_CSS_ + '"><p>The Insights planner\'s Basecamp sync ran into a problem, so some to-dos may be missing until it\'s fixed.</p>' +
@@ -1022,7 +1084,7 @@ function sendSyncAlert_(run) {
     (run.error ? '<p>Error: ' + esc_(run.error) + '</p>' : '') +
     (run.failed ? '<p>' + run.failed + ' rows could not be read from Basecamp.</p>' : '') +
     mailButton_(dashboardUrl_(), 'Open Settings') +
-    '<p style="color:#5F6775;font-size:12px">You\'ll get this once when the sync breaks, not on every run.</p></div>';
+    '<p style="color:#5F6775;font-size:12px">You\'ll get this when the sync breaks and every 3 days while it stays broken. If it\'s still broken after a day, the Hub Campfire gets a post too.</p></div>';
   MailApp.sendEmail({ to: to.join(','), subject: 'Insights planner: Basecamp sync needs attention', htmlBody: html, name: 'Insights planner' });
 }
 
@@ -1032,16 +1094,44 @@ function sendSyncAlert_(run) {
 const DIGEST_PROJECT_DEFAULT = '1KH Insights US Hub';
 function digestProject_() { return PropertiesService.getScriptProperties().getProperty('DIGEST_PROJECT') || DIGEST_PROJECT_DEFAULT; }
 
+// Posts once per Monday, whoever's trigger gets there first: a lock, a "posted today?" check before posting,
+// and DIGEST_LAST written the moment the post succeeds (so a later failure can't cause a re-post).
+// Company holidays (Team tab) are skipped.
 function weeklyDigest(e) {
   if (e && e.triggerUid && !isSyncOwner_()) return null;
-  const info = { at: new Date().toISOString(), preview: false };
-  info.post = postDigestToBasecamp_(false);
-  // Keep the Message Board tidy: earlier digests are archived once they're 3 weeks old (a failure here never blocks the digest)
-  try { info.archived = archiveOldDigests(); } catch (err) { info.archived = 0; console.log('Could not archive old digests: ' + err.message); }
-  const fixed = PropertiesService.getScriptProperties().getProperty('DIGEST_TO');
-  if (fixed) { sendDigest_(digestRecipients_(), false); info.count = digestRecipients_().length; }
-  PropertiesService.getScriptProperties().setProperty('DIGEST_LAST', JSON.stringify(info));
-  return info;
+  const lock = guardLock_(), held = lock.hasLock();   // already held when a backup run calls this
+  if (!held && !lock.tryLock(5000)) return null;
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const tz = ss_().getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+    let last = null; try { last = JSON.parse(props.getProperty('DIGEST_LAST') || 'null'); } catch (err) {}
+    if (last && !last.preview && last.at && Utilities.formatDate(new Date(last.at), tz, 'yyyy-MM-dd') === today) return last;
+    if (isCompanyHoliday_(today)) {
+      const skip = { at: new Date().toISOString(), preview: false, skipped: 'holiday' };
+      props.setProperty('DIGEST_LAST', JSON.stringify(skip));
+      return skip;
+    }
+    const info = { at: new Date().toISOString(), preview: false };
+    info.post = postDigestToBasecamp_(false);
+    props.setProperty('DIGEST_LAST', JSON.stringify(info));
+    // Keep the Message Board tidy: earlier digests are archived once they're 3 weeks old (a failure here never blocks the digest)
+    try { info.archived = archiveOldDigests(); } catch (err) { info.archived = 0; console.log('Could not archive old digests: ' + err.message); }
+    try {
+      if (props.getProperty('DIGEST_TO')) { sendDigest_(digestRecipients_(), false); info.count = digestRecipients_().length; }
+    } catch (err) { info.emailError = err.message; console.log('Digest email failed: ' + err.message); }
+    props.setProperty('DIGEST_LAST', JSON.stringify(info));
+    return info;
+  } finally { if (!held) lock.releaseLock(); }
+}
+// A lock separate from the one the sync uses for Sheet writes, so a backup run can hold it while the sync runs inside
+function guardLock_() { return LockService.getDocumentLock() || LockService.getScriptLock(); }
+function isCompanyHoliday_(iso) {
+  try {
+    // Company holidays live on the Team tab (H21:I45), same range the dashboard reads
+    const sh = ss_().getSheetByName('Team'); if (!sh) return false;
+    const tz = ss_().getSpreadsheetTimeZone();
+    return sh.getRange('H21:H45').getValues().some(r => r[0] instanceof Date && Utilities.formatDate(r[0], tz, 'yyyy-MM-dd') === iso);
+  } catch (err) { return false; }
 }
 
 // Email preview to the person clicking (kept for anyone whose mail is on Gmail)
@@ -1354,11 +1444,18 @@ function digestBasecampHtml_(g, preview, tags) {
 }
 
 // The connection to post with: the person running this (the sync owner on Mondays), else the first working one
-function postingService_() {
+// The Basecamp account a post goes out under: yours. Only scheduled posts (digest, check-in, alerts) fall back to
+// another connected account, so nobody can post as someone else from the dashboard.
+function postingService_(allowFallback) {
   const all = services_();
   if (!all.length) throw new Error('No Basecamp connections yet.');
   const mine = all.find(c => c.key === userKey_(String(currentEmail_()).toLowerCase()));
-  return (mine || all[0]).service;
+  if (mine) return mine.service;
+  if (!allowFallback) throw new Error('Connect your Basecamp first (Settings › Connect my Basecamp).');
+  let owner = null;
+  try { owner = JSON.parse(PropertiesService.getScriptProperties().getProperty('SYNC_OWNER') || 'null'); } catch (e) {}
+  const ownerConn = owner && owner.email ? all.find(c => c.key === userKey_(String(owner.email).toLowerCase())) : null;
+  return (ownerConn || all[0]).service;
 }
 function bcSend_(service, method, url, body) {
   const res = UrlFetchApp.fetch(url, { method: method, contentType: 'application/json', payload: body ? JSON.stringify(body) : undefined,
@@ -1402,7 +1499,7 @@ function digestPeople_(service, t) {
   return { ids: ids, tags: tags };
 }
 function postDigestToBasecamp_(preview) {
-  const service = postingService_();
+  const service = postingService_(!preview);
   const t = digestTarget_(service);
   const g = digestData_();
   let team = { ids: [], tags: {} };
@@ -1427,7 +1524,7 @@ function postDigestToBasecamp_(preview) {
 // Archived posts aren't deleted: they're under the project's Archive in Basecamp and can be unarchived there.
 const DIGEST_KEEP_DAYS = 20;   // a digest posted three Mondays ago is archived on the fourth
 function archiveOldDigests() {
-  const service = postingService_();
+  const service = postingService_(true);
   const t = digestTarget_(service);
   const cutoff = Date.now() - DIGEST_KEEP_DAYS * 864e5;
   const msgs = apiGetAll_(service, 'https://3.basecampapi.com/' + BC_ACCOUNT_ID + '/buckets/' + t.bucket + '/message_boards/' + t.board + '/messages.json');
@@ -1446,8 +1543,8 @@ function campfireLine_(g, url) {
   return '📬 The Insights digest for the week of ' + g.fs(g.mon) + ' is up. ' + bits.join(', ').replace(/^./, c => c.toUpperCase()) + '. Read it here: ' + url;
 }
 // ===== Campfire: Wednesday check-in (the Friday wrap-up is retired) =====
-function campfirePost_(text) {
-  const service = postingService_();
+function campfirePost_(text, allowFallback) {
+  const service = postingService_(!!allowFallback);
   const t = digestTarget_(service);
   if (!t.chat) throw new Error('"' + t.project + '" has no Campfire turned on.');
   bcSend_(service, 'post', 'https://3.basecampapi.com/' + BC_ACCOUNT_ID + '/buckets/' + t.bucket + '/chats/' + t.chat + '/lines.json', { content: text });
@@ -1497,7 +1594,7 @@ function checkinText_(week) {
 }
 function wednesdayCheckin(e) {
   if (e && e.triggerUid && !isSyncOwner_()) return null;
-  const out = campfirePost_(checkinText_(weekNumber_()));
+  const out = campfirePost_(checkinText_(weekNumber_()), true);
   PropertiesService.getScriptProperties().setProperty('CHECKIN_LAST', out.at);
   return out;
 }
@@ -1531,7 +1628,7 @@ const FRIDAY_WRAP_ON = false;
 function fridayWrap(e) {
   if (!FRIDAY_WRAP_ON) return null;
   if (e && e.triggerUid && !isSyncOwner_()) return null;
-  const out = campfirePost_(fridayWrapText_());
+  const out = campfirePost_(fridayWrapText_(), true);
   PropertiesService.getScriptProperties().setProperty('WRAP_LAST', out.at);
   return out;
 }
@@ -1930,9 +2027,9 @@ function expireOld_() {
 // So the planner keeps working if the owner's account is out, suspended or their triggers stop.
 const BACKUP_EVERY_HOURS = 2;
 function backupRun(e) {
-  const cache = CacheService.getScriptCache();
-  if (cache.get('backup_running')) return null;
-  cache.put('backup_running', '1', 1500);
+  // One backup at a time across everyone's triggers (the old cache check could let two start together)
+  const guard = guardLock_();
+  if (!guard.tryLock(1000)) return null;
   const props = PropertiesService.getScriptProperties();
   const read = k => { try { return JSON.parse(props.getProperty(k) || 'null'); } catch (err) { return null; } };
   const tz = ss_().getSpreadsheetTimeZone(), now = new Date();
@@ -1948,7 +2045,7 @@ function backupRun(e) {
     if (dow === 3 && hour >= CHECKIN_HOUR + 2 && dayOf(props.getProperty('CHECKIN_LAST')) !== today) { wednesdayCheckin(); did.push('check-in'); }
     if (FRIDAY_WRAP_ON && dow === 5 && hour >= WRAP_HOUR + 1 && dayOf(props.getProperty('WRAP_LAST')) !== today) { fridayWrap(); did.push('wrap'); }
     if (did.length) props.setProperty('BACKUP_LAST', JSON.stringify({ at: now.toISOString(), by: who, did: did }));
-  } finally { cache.remove('backup_running'); }
+  } finally { guard.releaseLock(); }
   return did;
 }
 // Adds the backup schedule under the current account (once). Called when someone connects and when they open the dashboard.
