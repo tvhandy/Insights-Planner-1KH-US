@@ -67,6 +67,8 @@
   .bar.ovb .t { font-weight: 600; } .bar.ovb .m { font-size: 10px; }
   .bar .t { flex: none; max-width: 60%; }
   .bar .m { flex: 1; min-width: 0; }
+  .blab { position: absolute; z-index: 2; border: 0; background: transparent; padding: 0 4px; font: 600 11px/16px inherit; font-family: inherit; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; text-align: left; }
+  .blab.late { color: #B91C1C; }
   .dm { position: absolute; top: 3px; width: 7px; height: 7px; transform: translateX(-50%) rotate(45deg); z-index: 1; }
   .lk { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); display: inline-flex; z-index: 1; }
   .lstrip { display: grid; gap: 4px; padding: 6px 4px 0; }
@@ -312,7 +314,7 @@ const EXTRA_COLORS = [['#7C5E10', '#F3EAD0'], ['#3F6212', '#E5EED6'], ['#1E40AF'
 const OPEN_EXCLUDE = ['Delivered', 'On hold', 'Needs triage', 'Dismissed'];
 
 /* ===== State ===== */
-const S = { welcome: (() => { try { return localStorage.getItem('kh_welcome') !== '1'; } catch (e) { return false; } })(), feedback: null, faqQ: '', timeoff: null, boardGroup: 'none', bTiming: 'all', bSort: 'due', bClient: '', bOlder: false, compact: (() => { try { return !!localStorage.getItem('kh_compact'); } catch (e) { return false; } })(), boardOpen: {}, book: { open: false, f: { likelihood: 'Likely', people: [] } }, planEdit: null, me: (() => { try { return localStorage.getItem('kh_me') || ''; } catch (e) { return ''; } })(), dtab: 'overview', expanded: false, search: '', bulk: false, askActual: null, hireFrom: '', fcWeeks: 13, actFilter: 'all', actSeen: null, syncing: false, awaiting: false, confirm: null, tab: 'overview', horizon: 'month', owner: 'All', showTriage: false, detail: null, adding: false, data: null, dragId: null, overCol: null };
+const S = { welcome: (() => { try { return localStorage.getItem('kh_welcome') !== '1'; } catch (e) { return false; } })(), feedback: null, faqQ: '', timeoff: null, boardGroup: 'none', bTiming: 'all', bSort: 'due', bClient: '', bOlder: false, compact: (() => { try { return !!localStorage.getItem('kh_compact'); } catch (e) { return false; } })(), boardOpen: {}, book: { open: false, f: { likelihood: 'Likely', people: [] } }, planEdit: null, me: (() => { try { return localStorage.getItem('kh_me') || ''; } catch (e) { return ''; } })(), dtab: 'overview', expanded: false, search: '', bulk: false, askActual: null, hireFrom: '', fcWeeks: 13, actFilter: 'all', actSeen: null, syncing: false, awaiting: false, confirm: null, tab: 'overview', horizon: 'month', owner: 'All', showTriage: false, detail: null, adding: false, data: null, dragId: null, overCol: null, pastOpen: {} };
 
 /* ===== Date helpers (calendar-day math, safe across daylight saving) ===== */
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -1463,15 +1465,34 @@ function timelineLanes(d, T, hz, people, opts) {
       .map(i => { const r = owner && onIt(i, owner) ? winRange(i, owner) : [i.s, i.e]; const ext = !!(i.pastDue && r[1] && +r[1] === +i.e); return { i, s: r[0], e: ext ? T : r[1], ext, ov: !!owner && i.overs.indexOf(owner) !== -1 && i.team.length > 1 }; })
       .filter(x => x.s && x.e && x.e >= hz.s && x.s <= hz.e)
       .sort((a, b) => (a.ov - b.ov) || (PR[a.i.priority] ?? 1) - (PR[b.i.priority] ?? 1) || a.s - b.s);
+    // Two or more past-due items in a lane fold into one red "N past due" chip (click to show them)
+    const laneKey = owner || '_unstaffed', pastList = mine.filter(x => x.ext && !x.ov);
+    let shown = mine;
+    if (pastList.length >= 2) {
+      shown = mine.filter(x => !(x.ext && !x.ov) || S.pastOpen[laneKey]);
+      shown.unshift({ group: true, list: pastList, s: pastList.reduce((m, x) => x.s < m ? x.s : m, pastList[0].s), e: T, ov: false });
+    }
+    // Oversight on a day or two of work is too small to draw; it still counts in the load
+    shown = shown.filter(x => !(x.ov && wd(maxD(x.s, hz.s), minD(x.e, hz.e)) < 2));
+    const pxDay = colW / Math.max(1, hz.gran === 'day' ? 1 : hz.gran === 'week' ? 7 : 30);
     const rows = [];
     let yTop = 0;
     const rowH = [];
     // Past due but still open: the bar runs to today, outlined red, until it's delivered or given a new date
-    const bars = mine.map(({ i, s: bS, e: bE, ov, ext }) => {
-      let r = rows.findIndex((row, k) => (rowH[k] === (ov ? 26 : 40)) && row.every(o => o.e < bS || o.s > bE));
+    const bars = shown.map(({ i, s: bS, e: bE, ov, ext, group, list }) => {
+      // Packed by position on screen; a bar too narrow for its title gets the title beside it, so that space is reserved too
+      const l0 = bpos(maxD(bS, hz.s)), r0 = bpos(add(minD(bE, hz.e), 1)), w0 = Math.max(r0 - l0, 0.2);
+      const label = group ? list.length + ' past due, still open' : i.title;
+      const narrow = !ov && w0 * colW < 96 && !group || (group && w0 * colW < 150);
+      const labW = narrow ? Math.min(190, 7 * label.length + 14) / colW : 0;
+      let r = rows.findIndex((row, k) => (rowH[k] === (ov ? 26 : 40)) && row.every(o => o.r <= l0 + 0.02 || o.l >= r0 + labW - 0.02));
       if (r === -1) { r = rows.length; rows.push([]); rowH.push(ov ? 26 : 40); }
-      rows[r].push({ s: bS, e: bE });
+      rows[r].push({ l: l0, r: r0 + labW });
       const top = 6 + rowH.slice(0, r).reduce((t, h) => t + h, 0);
+      const side = narrow ? `<button class="blab${group || ext ? ' late' : ''}" ${group ? `data-act="past-toggle" data-k="${esc(laneKey)}"` : (opts.pick ? 'data-pl="sel" data-id' : 'data-open') + '="' + esc(i.id) + '"'} style="top:${top + 9}px;left:calc(${pct(r0)}% + 2px);max-width:${Math.round(labW * colW)}px" title="${esc(group ? list.map(x => x.i.title + ' (due ' + fmt(x.i.e) + ')').join('\n') : i.title)}">${esc(group && S.pastOpen[laneKey] ? 'Hide ' + list.length + ' past due' : label)}</button>` : '';
+      if (group) {
+        return `<button class="bar" data-act="past-toggle" data-k="${esc(laneKey)}" title="${esc(list.map(x => x.i.title + ' (due ' + fmt(x.i.e) + ')').join('\n'))}" style="top:${top}px;left:calc(${pct(l0)}% + 3px);width:calc(${pct(w0)}% - 6px);min-width:30px;background:#FEF2F2;color:#991B1B;border:1.5px solid #DC2626">${narrow ? '' : `<span class="t" style="max-width:100%">${esc(S.pastOpen[laneKey] ? 'Hide ' + list.length + ' past due' : label)}</span>`}</button>${side}`;
+      }
       const atDue = +bE === +i.e || ext;
       const [c, tint] = CLIENT[i.client]; usedClients[i.client] = 1;
       const l = bpos(maxD(bS, hz.s)), rr = bpos(add(minD(bE, hz.e), 1)), w = Math.max(rr - l, 0.2);
@@ -1513,7 +1534,7 @@ function timelineLanes(d, T, hz, people, opts) {
       }
       const lock = atDue && !cutR && i.clientDate ? `<span class="lk" title="Client date">${I.lock}</span>` : '';
       return `<button class="bar${ov ? ' ovb' : ''}" ${opts.pick ? 'data-pl="sel" data-id' : 'data-open'}="${esc(i.id)}" title="${esc(i.title)}${ov ? ' (oversight)' : ''}${nowStep ? ' · ' + esc(nowStep.label) : ''}" style="top:${top}px;left:calc(${pct(l)}% + 3px);width:calc(${pct(w)}% - 6px);min-width:30px;${look};${opts.sel === i.id ? 'box-shadow:0 0 0 3px #fff,0 0 0 5px #7C3AED;z-index:3;' : past ? 'box-shadow:0 0 0 2px #fff,0 0 0 4px #DC2626;' : ''}${i.isNew || i.planned ? 'outline:2px dashed #7C3AED;outline-offset:1px;' : ''}border-radius:${cutL ? 0 : 8}px ${cutR ? '0 0' : '8px 8px'} ${cutL ? 0 : 8}px">
-        ${segs}<span class="t"${wide || ov ? '' : ' style="max-width:100%"'}>${cutL ? '← ' : ''}${esc(i.title)}</span>${wide || ov ? `<span class="m">${meta.join(' · ')}${cutR ? ' →' : ''}</span>` : ''}${lock}</button>`;
+        ${segs}${narrow ? '' : `<span class="t"${wide || ov ? '' : ' style="max-width:100%"'}>${cutL ? '← ' : ''}${esc(i.title)}</span>${wide || ov ? `<span class="m">${meta.join(' · ')}${cutR ? ' →' : ''}</span>` : ''}`}${lock}</button>${side}`;
     }).join('');
     const trackH = 12 + (rowH.length ? rowH.reduce((t, h) => t + h, 0) : 40);
     const booked = loadFor(owner, hz.s, hz.e), avail = p ? availFor(p, hz.s, hz.e) : 0;
@@ -2314,6 +2335,7 @@ document.addEventListener('click', e => {
       .withFailureHandler(err => { el.disabled = false; toast('Could not save: ' + err.message); })
       .setPlanFields(item.row, item.id, f);
   }
+  else if (el.dataset.act === 'past-toggle') { S.pastOpen[el.dataset.k] = !S.pastOpen[el.dataset.k]; render(); }
   else if (el.dataset.act === 'dates-edit') { S.datesEdit = S.datesEdit === el.dataset.id ? null : el.dataset.id; renderLayer(); }
   else if (el.dataset.act === 'clear-plan') {
     const item = S.data.items.find(x => x.id === el.dataset.id); if (!item) return;
@@ -2811,8 +2833,9 @@ function planTab(d, T) {
   }
 
   // Estimates missing (draft)
-  const noEst = draft ? dd.items.filter(i => i.open && !i.tent && i.team.length && !i.handsEst && i.e && i.e >= T).slice(0, 6) : [];
-  const estStrip = noEst.length ? `<div class="row" style="gap:8px"><span class="lbl" style="color:#92400E">Needs an estimate:</span>${noEst.map(i => `<span class="pill" style="cursor:default;display:inline-flex;align-items:center;gap:4px;padding:4px 4px 4px 12px">${esc(i.title.length > 28 ? i.title.slice(0, 27) + '…' : i.title)}${[4, 8, 12].map((v, k) => `<button class="chip" style="border:0;cursor:pointer;background:#FEF3C7;color:#78350F;display:inline-flex;align-items:center;min-height:26px" data-pl="est" data-id="${esc(i.id)}" data-v="${v}">${'SML'[k]} · ${v} d</button>`).join('')}</span>`).join('')}</div>` : '';
+  const noEstAll = draft ? dd.items.filter(i => i.open && !i.tent && i.team.length && !i.handsEst && i.e && i.e >= T && i.s <= W1) : [];
+  const noEst = P0.estAll ? noEstAll : noEstAll.slice(0, 2);
+  const estStrip = noEst.length ? `<div class="row" style="gap:8px"><span class="lbl" style="color:#92400E">${noEstAll.length} need${noEstAll.length === 1 ? 's' : ''} an estimate:</span>${noEst.map(i => `<span class="pill" style="cursor:default;display:inline-flex;align-items:center;gap:4px;padding:4px 4px 4px 12px">${esc(i.title.length > 28 ? i.title.slice(0, 27) + '…' : i.title)}${[4, 8, 12].map((v, k) => `<button class="chip" style="border:0;cursor:pointer;background:#FEF3C7;color:#78350F;display:inline-flex;align-items:center;min-height:26px" data-pl="est" data-id="${esc(i.id)}" data-v="${v}">${'SML'[k]} · ${v} d</button>`).join('')}</span>`).join('')}${noEstAll.length > 2 ? `<button class="pill" data-pl="estall">${P0.estAll ? 'Show fewer' : 'Show all ' + noEstAll.length}</button>` : ''}</div>` : '';
 
   // Selected deliverable
   const sel = P0.sel ? dd.items.find(i => i.id === P0.sel) : null;
@@ -2844,7 +2867,7 @@ function planTab(d, T) {
       </div>`;
   }
 
-  const checksHtml = `<div class="card" style="gap:8px"><span class="lbl" style="color:var(--accent)">Checks${checks.length ? ' · ' + checks.length : ''}</span>${checks.length ? `<div class="grid2" style="gap:8px">${checks.slice(0, 12).map(c => `<button class="callout ${c[0] === 'red' ? 'bad' : 'warn'}" style="text-align:left;cursor:pointer;border:0;width:100%" ${c[1] ? `data-pl="sel" data-id="${esc(c[1])}"` : ''}><b>${esc(c[2])}</b><br>${esc(c[3])}</button>`).join('')}</div>` + (checks.length > 12 ? `<span class="sub">${checks.length - 12} more</span>` : '') : '<span class="sub" style="color:#047857;font-weight:700">All clear: nobody over target, everything fits, reviews covered, splits set.</span>'}</div>`;
+  const checksHtml = `<div class="card" style="gap:8px"><span class="lbl" style="color:var(--accent)">Checks${checks.length ? ' · ' + checks.length : ''}</span>${checks.length ? `<div class="grid2" style="gap:8px">${checks.slice(0, P0.checksAll ? 60 : 6).map(c => `<button class="callout ${c[0] === 'red' ? 'bad' : 'warn'}" style="text-align:left;cursor:pointer;border:0;width:100%" ${c[1] ? `data-pl="sel" data-id="${esc(c[1])}"` : ''}><b>${esc(c[2])}</b><br>${esc(c[3])}</button>`).join('')}</div>` + (checks.length > 6 ? `<button class="pill" style="align-self:flex-start" data-pl="checksall">${P0.checksAll ? 'Show fewer' : 'Show all ' + checks.length}</button>` : '') : '<span class="sub" style="color:#047857;font-weight:700">All clear: nobody over target, everything fits, reviews covered, splits set.</span>'}</div>`;
   const changesHtml = draft ? `<div class="card" style="gap:8px"><span class="lbl" style="color:var(--accent)">In this draft · nothing is saved to the planner until you apply</span>${changes.length ? changes.map(c => `<div class="callout info" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><span><b>${esc(c.title)}</b><br>${esc(c.text)}</span><button class="btn ghost" style="min-height:30px" data-pl="undo" data-id="${esc(c.id)}" ${c.added !== undefined ? `data-added="${c.added}"` : ''}>Undo</button></div>`).join('') : '<span class="sub">No changes yet. Click a bar to move it or change who\'s on it, or use Add work.</span>'}</div>` : '';
 
   const controls = `<div class="row between" style="gap:10px">${estStrip || `<span class="chip" style="${overN ? 'background:#FEE2E2;color:#7F1D1D' : 'background:#DCFCE7;color:#14532D'}">${overN ? overN + (overN === 1 ? ' week over target' : ' weeks over target') : 'No one over target'}</span>`}
@@ -2852,15 +2875,15 @@ function planTab(d, T) {
       <div class="row" style="gap:6px"><span class="lbl">Plan to</span><div class="seg sm">${[[0.8, '80%'], [1, '100%']].map(([v, l]) => `<button class="${target === v ? 'on' : ''}" data-pl="target" data-v="${v}">${l}</button>`).join('')}</div></div></div></div>`;
 
   return `${bar}${draftsHtml}${fitHtml}
-    <div class="plgrid">
-      <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
-        ${controls}
+    ${controls}
         <div class="card" style="gap:12px"><div style="display:flex;flex-direction:column;gap:2px"><h2>${draft ? 'Draft timeline' : 'Team timeline'}</h2><span class="sub">Next 6 weeks · ${fmt(W0)} to ${fmt(W1)} · load against your ${Math.round(target * 100)}% target${P0.weighted ? ' · tentative work at its likelihood' : ''} · click a bar to select it</span></div>
           <div class="tl"><div style="min-width:${250 + lanesOut.nB * lanesOut.colW}px">
             <div class="tlhead"><div style="padding:12px 16px;font-size:12px;font-weight:600;color:var(--soft)">Team · by week</div>
               <div style="display:grid;grid-template-columns:repeat(${lanesOut.nB},minmax(0,1fr))">${lanesOut.B.map(b => `<div style="padding:12px 14px 8px;font-size:13px;border-left:1px solid var(--line2);color:#374151"><b>${b.top}</b> <span style="opacity:.8">${b.sub}</span>${dayLetters(b)}</div>`).join('')}</div></div>
             ${lanesOut.laneHtml}
           </div></div></div>
+    <div class="plgrid">
+      <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
         ${selHtml ? `<div class="card" style="gap:12px">${selHtml}</div>` : ''}
         ${changesHtml}
         ${checksHtml}
@@ -2892,6 +2915,8 @@ function planAct(el) {
   if (a === 'dopen') { const x = (P0.drafts || []).find(y => y.id === el.dataset.id); if (!x) return; P0.draft = { id: x.id, name: x.name, author: x.author, shared: x.shared, options: x.options && x.options.A ? x.options : { A: newOption() } }; P0.cur = 'A'; P0.savedAt = x.updated || ''; P0.mode = 'draft'; P0.draftsOpen = false; P0.sel = null; P0.fit = null; render(); return; }
   if (a === 'ddel') { const id = el.dataset.id; if (!two('ddel-' + id)) return; google.script.run.withSuccessHandler(() => { P0.drafts = (P0.drafts || []).filter(x => x.id !== id); if (P0.draft && P0.draft.id === id) { P0.draft = null; P0.mode = 'live'; } toast('Draft deleted'); render(); }).withFailureHandler(err => toast('Could not delete: ' + err.message)).deletePlanDraft(id); return; }
   if (a === 'save') { if (!P0.draft) return; planSaveNow(); return; }
+  if (a === 'estall') { P0.estAll = !P0.estAll; render(); return; }
+  if (a === 'checksall') { P0.checksAll = !P0.checksAll; render(); return; }
   if (a === 'weight') { P0.weighted = el.dataset.v === '1'; render(); return; }
   if (a === 'psort') { P0.psort = el.dataset.v; render(); return; }
   if (a === 'rec') { P0.recOpen[el.dataset.k] = !P0.recOpen[el.dataset.k]; render(); return; }
