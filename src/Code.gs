@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.11.02.1';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.11.02.2';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -1448,7 +1448,7 @@ const CHECKIN_MESSAGES = [
   '💬 Wednesday check-in: if you\'ve got a bit of room this week, offer it up. If you could use a second pair of eyes, ask. That\'s what the team\'s for.',
   '🙌 Shout-out Wednesday! Has a teammate helped you out lately? Give them a thank-you here.',
   '🧘 Midweek reminder to step away from the screen for a few minutes today. Stretch, grab a coffee, get some air. The data will still be there.',
-  '🌱 How\'s the week treating you? If anything feels off, reach out to {lead} or anyone on the team. No issue is too small.',
+  '🌱 How\'s the week treating you? If anything feels off, say something, here or in a DM. No issue is too small.',
   '🧩 Midweek check-in: anything you\'re working on that someone else on the team might know a trick for? Ask away.',
   '🎧 Happy hump day! What\'s keeping you going this week: a playlist, a podcast, a good snack? Share if you\'d like.',
   '📣 Wednesday nudge: if a deadline is looking tight, flag it early. It\'s much easier to help on Wednesday than on Friday.',
