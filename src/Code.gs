@@ -23,7 +23,7 @@
 
 // ===== Settings =====
 const BC_ACCOUNT_ID = '4104244';
-const PLANNER_VERSION = '2026.11.02.9';                // bump on every code release; matches the folder name in Drive > Insights planner code
+const PLANNER_VERSION = '2026.11.09.1';                // bump on every code release; matches the folder name in Drive > Insights planner code
 const CONTACT = 'tom.handy@1000heads.com';               // Basecamp requires a contact in the User-Agent
 const SHEET_NAME = 'Planner';
 const FIRST_ROW = 2;
@@ -234,6 +234,16 @@ function showConnections() {
   SpreadsheetApp.getUi().alert("Basecamp connections", list || 'Nobody is connected yet.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
+// ===== View-only link =====
+// A second web app deployment set to "Execute as: me" lets people look without approving Google permissions.
+// There the script runs as the deployer while the viewer is someone else, so every change is refused.
+function isViewOnly_() {
+  try {
+    const a = String(Session.getActiveUser().getEmail() || '').toLowerCase(), e = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
+    return !!e && a !== e;
+  } catch (err) { return false; }
+}
+function guardWrite_() { if (isViewOnly_()) throw new Error('This is the view-only planner, so it can\'t make changes. Use the full planner link to edit.'); }
 // ===== Planner admins =====
 // High-impact actions (take over the sync, apply a planning draft, bulk stage changes, change a type's day range,
 // delete someone else's time off) are for admins only. ADMINS script property, comma-separated emails; until it's set,
@@ -248,6 +258,7 @@ function admins_() {
 function isAdmin_() { return admins_().indexOf(String(currentEmail_()).toLowerCase()) !== -1; }
 function requireAdmin_() { if (!isAdmin_()) throw new Error('Only a planner admin can do this. Ask ' + admins_().map(e => e.split('@')[0].replace(/[._]/g, ' ')).join(' or ') + '.'); }
 function setAdmins(list) {
+  guardWrite_();
   requireAdmin_();
   const clean = (list || []).map(x => String(x).trim().toLowerCase()).filter(x => /^[^@\s]+@[^@\s]+\.[a-z]+$/.test(x)).filter((x, k, a) => a.indexOf(x) === k);
   if (clean.indexOf(String(currentEmail_()).toLowerCase()) === -1) throw new Error('Keep yourself on the list, or ask another admin to remove you.');
@@ -407,6 +418,7 @@ function showAddForm() {
 }
 
 function addDeliverable(f) {
+  guardWrite_();
   const sheet = ss_().getSheetByName(SHEET_NAME);
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -1097,6 +1109,7 @@ function alertRecipients_(run) {
 }
 // Settings › Test alert: emails the alert list (no Campfire post)
 function testSyncAlert() {
+  guardWrite_();
   requireAdmin_();
   const to = alertRecipients_(null);
   if (!to.length) throw new Error('No one to alert yet. Add ALERT_TO or set a sync owner.');

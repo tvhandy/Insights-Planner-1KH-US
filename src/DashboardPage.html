@@ -76,6 +76,9 @@
   .dc.on { background: var(--accent); color: #fff; } .dc.past { background: #E9DDFB; color: #4C1D95; } .dc.ov { background: #E5E7EB; }
   .dc.out { background: repeating-linear-gradient(45deg, #EEF0F3 0 3px, #FFFFFF 3px 6px); } .dc.now { box-shadow: inset 2px 0 0 var(--accent); }
   .dmk { width: 9px; height: 9px; background: #374151; transform: rotate(45deg); border-radius: 2px; display: block; }
+  body.viewonly [data-act="add"], body.viewonly [data-act="timeoff"], body.viewonly [data-act="feedback"], body.viewonly [data-act="to-new"],
+  body.viewonly [data-pl="mode"][data-v="draft"], body.viewonly [data-pl="mode"][data-v="new"], body.viewonly [data-pl="fitnew"], body.viewonly [data-pl="godraft"], body.viewonly [data-pl="drafts"],
+  body.viewonly [data-act="export-tl"], body.viewonly [data-pl="export"], body.viewonly [data-act="sync"], body.viewonly [data-act="connect"], body.viewonly [data-connect], body.viewonly .viewonly-hide { display: none !important; }
   .htiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   @media (max-width: 900px) { .htiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .htile { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
@@ -1402,6 +1405,7 @@ function render() {
   </nav>
   <div class="tabs" role="tablist">${tabs.map(([k, l, c]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? 'on' : ''}" data-tab="${k}">${l}${c !== '' ? `<span class="count">${c}</span>` : ''}</button>`).join('')}</div>`;
 
+  if (S.viewOnly) h += `<div class="callout info" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span><b>View only.</b> You can see everything here, but nothing can be changed from this link, and it doesn't ask for access to your Google account.</span></div>`;
   h += leaveBanner(d, T);
   if (S.tab === 'overview') h += healthRow(d, T, true) + overview(d, T, H, hz, { openItems, triage, overdue, wkS, wkE, nwE });
   if (S.tab === 'pipeline') S.tab = 'plan';
@@ -2287,6 +2291,23 @@ function save(fn, id, field, value, label) {
     [fn](item.row, id, value);
 }
 
+// View-only link: only looking around works; anything that would change something is stopped here
+const VIEW_OK_ACT = ['b-compact', 'b-older', 'copy-wbs', 'expand', 'goto-settings', 'leave-notes', 'past-toggle', 'welcome', 'welcome-done', 'welcome-go', 'refresh-sync'];
+const VIEW_OK_PL = ['checksall', 'estall', 'psort', 'rec', 'sel', 'target', 'weight', 'fitclose'];
+const viewBlock = () => toast('View only: open the full planner link to make changes');
+document.addEventListener('click', e => {
+  if (!S.viewOnly) return;
+  const a = e.target.closest('[data-act]'), p = e.target.closest('[data-pl]'), c = e.target.closest('[data-connect]');
+  const ok = (a ? VIEW_OK_ACT.indexOf(a.dataset.act) !== -1 : true) && (p ? VIEW_OK_PL.indexOf(p.dataset.pl) !== -1 || (p.dataset.pl === 'mode' && p.dataset.v === 'live') : true) && !c;
+  if (!ok) { e.preventDefault(); e.stopImmediatePropagation(); viewBlock(); }
+}, true);
+['change', 'input'].forEach(t => document.addEventListener(t, e => {
+  if (!S.viewOnly) return;
+  const el = e.target;
+  if (el.id === 'q' || el.id === 'faqQ' || el.closest('.search')) return;   // searching is fine
+  if (el.closest('#layer') || el.matches('[data-plc]')) { e.stopImmediatePropagation(); if (t === 'change') { viewBlock(); renderLayer(); render(); } }
+}, true));
+document.addEventListener('dragstart', e => { if (S.viewOnly) { e.preventDefault(); viewBlock(); } }, true);
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-tab],[data-h],[data-owner],[data-open],[data-close],[data-act],[data-confirm],[data-triage],[data-note],[data-afilter],[data-dtab],[data-pick],[data-bset],[data-rail],[data-bkadd]');
   if (!el) return;
@@ -3235,8 +3256,8 @@ document.addEventListener('change', e => {
 /* ===== Load ===== */
 function load() {
   google.script.run
-    .withSuccessHandler(d => { S.raw = JSON.parse(JSON.stringify(d)); S.data = prep(d); const w = document.getElementById('who'); if (w) w.textContent = d.me ? 'Signed in as ' + d.me : ''; const vr = document.getElementById('ver'); if (vr) vr.textContent = d.version ? 'v' + d.version : ''; render();
-      if (!S.backupChecked) { S.backupChecked = true; const mine = (d.sync && d.sync.conns || []).find(c => c.me); if (mine && !mine.backup) google.script.run.withSuccessHandler(ok => { if (ok) mine.backup = true; }).ensureMyBackup(); } })
+    .withSuccessHandler(d => { S.viewOnly = !!d.viewOnly; document.body.classList.toggle('viewonly', S.viewOnly); S.raw = JSON.parse(JSON.stringify(d)); S.data = prep(d); const w = document.getElementById('who'); if (w) w.textContent = d.me ? 'Signed in as ' + d.me : ''; const vr = document.getElementById('ver'); if (vr) vr.textContent = d.version ? 'v' + d.version : ''; render();
+      if (!S.backupChecked && !S.viewOnly) { S.backupChecked = true; const mine = (d.sync && d.sync.conns || []).find(c => c.me); if (mine && !mine.backup) google.script.run.withSuccessHandler(ok => { if (ok) mine.backup = true; }).ensureMyBackup(); } })
     .withFailureHandler(err => { document.getElementById('app').innerHTML = '<div class="loading">Could not load the planner: ' + esc(err.message) + '</div>'; })
     .getDashboardData({ lite: true });
 }

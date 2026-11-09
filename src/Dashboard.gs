@@ -163,6 +163,7 @@ function getDashboardData(opts) {
   }
 
   return {
+    viewOnly: isViewOnly_(),
     items, team, timeOff, holidays, notes, activity, connected, sync, me: displayName_(),
     lists: { accounts: col('A2:A30'), types: col('D2:D30'), scales: col('H2:H4'), stages: col('K2:K15'), typeRanges: typeRanges, scaleFactors: scaleFactors },
     version: typeof PLANNER_VERSION === 'string' ? PLANNER_VERSION : '', leadShare: leadShare, ovDefault: ovDefault, accountOv: accountOv, summerFridays: summerFridays, review: review, timesheets: timesheets_(ss, iso, str),
@@ -173,6 +174,7 @@ function getDashboardData(opts) {
 
 // Adds a note to a card; the Notes tab keeps the full history
 function addNote(id, text) {
+  guardWrite_();
   const t = String(text || '').trim();
   if (!t) throw new Error('Write a note first.');
   if (t.length > 5000) throw new Error('Notes are limited to 5,000 characters.');
@@ -209,12 +211,14 @@ function displayName_() {
 
 // Write-backs check the row still holds the same ID, so a sort in the Sheet can't misfile a change
 function setStage(row, id, stage) {
+  guardWrite_();
   const r = writeCell_(row, id, 11, stage);
   logRow_(r.row, 'stage', 'Moved to ' + stage);
   return r;
 }
 
 function setBooking(row, id, booking) {
+  guardWrite_();
   const r = writeCell_(row, id, 25, booking);
   logRow_(r.row, 'stage', 'Booking set to ' + booking);
   return r;
@@ -222,6 +226,7 @@ function setBooking(row, id, booking) {
 
 // Bulk clean-up: one stage for many rows
 function setStages(list, stage) {
+  guardWrite_();
   requireAdmin_();
   const allowed = ['Delivered', 'Dismissed', 'Not started', 'On hold'];
   if (allowed.indexOf(stage) === -1) throw new Error('Not a bulk stage: ' + stage);
@@ -232,6 +237,7 @@ function setStages(list, stage) {
 
 // How long a delivered piece of work actually took, for checking estimates
 function setActual(row, id, days) {
+  guardWrite_();
   const v = days === '' || days === null ? '' : Math.round(Number(days) * 100) / 100;
   if (v !== '' && !(v >= 0 && v <= 200)) throw new Error('Enter days between 0 and 200.');
   const r = writeCell_(row, id, 29, v);
@@ -268,6 +274,7 @@ function cleanTimeOff_(f) {
   return { name, start, end, type, day: half ? 'Half day (' + part + ')' : 'Full day', notes: [cover ? 'Coverage: ' + cover.replace(/\.$/, '') + '.' : '', note].filter(String).join(' ') };
 }
 function addTimeOff(f) {
+  guardWrite_();
   const x = cleanTimeOff_(f);
   const lock = LockService.getScriptLock(); lock.waitLock(10000);
   try {
@@ -290,6 +297,7 @@ function timeOffRow_(sh, id) {
   return k + 2;
 }
 function updateTimeOff(id, f) {
+  guardWrite_();
   const x = cleanTimeOff_(f);
   const lock = LockService.getScriptLock(); lock.waitLock(10000);
   try {
@@ -300,6 +308,7 @@ function updateTimeOff(id, f) {
   } finally { lock.releaseLock(); }
 }
 function deleteTimeOff(id) {
+  guardWrite_();
   const lock = LockService.getScriptLock(); lock.waitLock(10000);
   try {
     const sh = timeOffSheet_(), r = timeOffRow_(sh, id);
@@ -329,12 +338,14 @@ function timesheets_(ss, iso, str) {
 
 // Adds the every-2-hours backup schedule under the person viewing (once), so the planner never depends on one account
 function ensureMyBackup() {
+  guardWrite_();
   try { return ensureBackupTrigger_(); } catch (e) { return false; }
 }
 
 // Card drawer: set a deliverable's client. Optionally the same for every row from its Basecamp project, and
 // remember the project so future to-dos from it get this client automatically.
 function setClient(row, id, account, everyRow) {
+  guardWrite_();
   account = String(account || '').trim();
   if (!account) throw new Error('Type or pick a client.');
   const sheet = ss_().getSheetByName('Planner');
@@ -357,6 +368,7 @@ function setClient(row, id, account, everyRow) {
 
 // Feedback button: saved to the Feedback tab and the Activity feed; optionally posted in the Hub's Campfire
 function sendFeedback(f) {
+  guardWrite_();
   const text = String((f && f.text) || '').trim().slice(0, 2000);
   if (!text) throw new Error('Add a few words first.');
   const ss = ss_();
@@ -375,6 +387,7 @@ function sendFeedback(f) {
 
 // Estimate check: write a new day range for a deliverable type to the Lists tab
 function applyTypeRange(type, min, max) {
+  guardWrite_();
   requireAdmin_();
   const ls = ss_().getSheetByName('Lists');
   const names = ls.getRange('D2:D30').getValues().map(r => String(r[0]).trim());
@@ -397,6 +410,7 @@ function logRow_(row, type, text) {
 
 // Saves a per-person split ("Pranav P. 4; Tom H. 0.5") and sets Override days to its total
 function setSplit(row, id, text, total) {
+  guardWrite_();
   const r = writeCell_(row, id, 27, String(text || ''));
   if (text && Number(total) > 0) writeCell_(r.row, id, 7, Math.round(Number(total) * 100) / 100);
   logRow_(r.row, 'split', text ? 'Days per person set: ' + text : 'Back to the default split by role');
@@ -407,6 +421,7 @@ function setSplit(row, id, text, total) {
 // p: { title, days: ['yyyy-mm-dd', …], weeks: [{ label, s, e }], rows: [{ person, title, client, color, tint, solid, tent, days, from, to, window, stage, marks: { 'yyyy-mm-dd': 'KO'|'IR'|'Due' } }],
 //      load: [{ person, cells: [{ used, avail, cap }] }], target }
 function exportTimeline(p) {
+  guardWrite_();
   if (typeof p === 'string') p = JSON.parse(p);
   const ss = SpreadsheetApp.create(String(p.title || 'Insights timeline').slice(0, 100));
   const tz = ss.getSpreadsheetTimeZone();
@@ -534,6 +549,7 @@ function listPlanDrafts() {
 }
 // Creates or updates a draft: { id?, name, options: { A: changes, B?: changes } }
 function savePlanDraft(dr) {
+  guardWrite_();
   const sh = planSheet_(), me = me_();
   const json = JSON.stringify(dr.options || {});
   if (json.length > 45000) throw new Error('This draft is too big to save. Apply or discard some changes first.');
@@ -550,6 +566,7 @@ function savePlanDraft(dr) {
   } finally { lock.releaseLock(); }
 }
 function sharePlanDraft(id, name) {
+  guardWrite_();
   const sh = planSheet_();
   const n = sh.getLastRow();
   const ids = n < 2 ? [] : sh.getRange(2, 1, n - 1, 1).getValues().map(r => String(r[0]));
@@ -561,6 +578,7 @@ function sharePlanDraft(id, name) {
   return cur;
 }
 function deletePlanDraft(id) {
+  guardWrite_();
   const sh = planSheet_();
   const n = sh.getLastRow();
   const ids = n < 2 ? [] : sh.getRange(2, 1, n - 1, 1).getValues().map(r => String(r[0]));
@@ -570,6 +588,7 @@ function deletePlanDraft(id) {
 // Writes a plan to the Planner only (Basecamp is untouched). changes: [{ row, id, title, fields: { split, est, planStart, planIR, planDue, reviewer, clientDate }, summary }]
 // newItems: Planning bookings (same shape as bookWork) for pipeline work pencilled in from the plan
 function applyPlan(changes, newItems, draftId) {
+  guardWrite_();
   requireAdmin_();
   const P = s => { const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2], 12); };
   const COLS = { split: 27, est: 7, clientDate: 33, planStart: 34, planIR: 35, planDue: 36, reviewer: 37 };
@@ -593,6 +612,7 @@ function applyPlan(changes, newItems, draftId) {
 }
 // Drops the plan dates on one deliverable so Basecamp's dates apply again
 function clearPlanDates(row, id) {
+  guardWrite_();
   let r = writeCell_(row, id, 34, '');
   r = writeCell_(r.row, id, 35, ''); r = writeCell_(r.row, id, 36, '');
   logRow_(r.row, 'timeline', 'Back to Basecamp dates (plan dates cleared)');
@@ -601,6 +621,7 @@ function clearPlanDates(row, id) {
 
 // Marks the due date as a date promised to the client (Planner column AG). Plan mode won't move a locked date.
 function setClientDate(row, id, on) {
+  guardWrite_();
   const r = writeCell_(row, id, 33, on ? 'Yes' : '');
   logRow_(r.row, 'timeline', on ? 'Due date marked as a client date' : 'Client date unlocked');
   return { row: r.row, id: id, clientDate: !!on };
@@ -608,6 +629,7 @@ function setClientDate(row, id, on) {
 
 // Hands a deliverable from someone leaving to a teammate: new split, and a new Owner when needed
 function handOver(row, id, text, total, newOwner, from, to) {
+  guardWrite_();
   let r = { row: row };
   if (text) r = setSplit(row, id, text, total);
   if (newOwner) r = writeCell_(r.row, id, 9, newOwner);
@@ -617,6 +639,7 @@ function handOver(row, id, text, total, newOwner, from, to) {
 
 // Book work from the Planning tab: a Tentative row with no Basecamp link
 function bookWork(f) {
+  guardWrite_();
   const title = String(f.title || '').trim();
   if (!title) throw new Error('Give the work a name.');
   if (!f.due) throw new Error('Add a due date.');
@@ -644,6 +667,7 @@ function bookWork(f) {
 
 // Planning actions: assign people, move dates, set likelihood
 function setPlanFields(row, id, f) {
+  guardWrite_();
   const P = s => { const a = String(s).split('-').map(Number); return new Date(a[0], a[1] - 1, a[2], 12); };
   let r = { row: row }; const said = [];
   if (f.people) { const p = f.people.filter(String); r = writeCell_(r.row, id, 9, p[0] || ''); writeCell_(r.row, id, 10, p.join(', ')); said.push(p.length ? 'Assigned to ' + p.join(', ') : 'Unassigned'); }
@@ -687,6 +711,7 @@ function readProp_(k) {
 
 // A fresh Basecamp sign-in link for whoever clicks Connect. Links expire, so never reuse one baked into the page.
 function getConnectUrl() {
+  guardWrite_();
   return connectUrlFor_(userKey_(String(currentEmail_()).toLowerCase()));
 }
 
@@ -734,12 +759,14 @@ function syncStatus_() {
 function refreshSyncStatus() { return syncStatus_(); }
 
 function runSyncFromDashboard() {
+  guardWrite_();
   const full = displayName_();
   const run = runSync_(matchTeamName_(full) || full);
   return { run: run, sync: syncStatus_() };
 }
 
 function disconnectMine() {
+  guardWrite_();
   const key = userKey_(currentEmail_());
   serviceFor_(key).reset();
   const reg = registry_(); delete reg[key]; saveRegistry_(reg);
@@ -748,6 +775,7 @@ function disconnectMine() {
 
 // Moves the twice-daily sync (and the paste-a-link handler) to the person clicking
 function takeOverSync() {
+  guardWrite_();
   requireAdmin_();
   setup();
   return syncStatus_();
@@ -755,10 +783,12 @@ function takeOverSync() {
 
 // Settings tab: email the Monday digest to just the person clicking
 function postDigestPreviewFromDashboard() {
+  guardWrite_();
   const info = postDigestPreview();
   return { info: info, sync: syncStatus_() };
 }
 function sendDigestPreviewFromDashboard() {
+  guardWrite_();
   const info = sendDigestPreview();
   return { info: info, sync: syncStatus_() };
 }
