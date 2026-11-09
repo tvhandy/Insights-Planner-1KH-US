@@ -12,6 +12,7 @@
 const DASH_TITLE = 'Insights Planner | 1KH US [Beta]';          // the browser tab's name
 // The browser tab's icon: a public .png or .ico link (the planner icon, hosted in the GitHub repo's assets folder)
 const DASH_FAVICON = 'https://raw.githubusercontent.com/tvhandy/Insights-Planner-1KH-US/main/assets/planner-icon-dark.png';
+const DASH_FAVICON_VIEW = 'https://raw.githubusercontent.com/tvhandy/Insights-Planner-1KH-US/main/assets/planner-icon-view.png';   // view-only link
 const PLANNER_SHEET_ID = '1as50OMGMFfcaBEgopWL9aaRfAxHLuH8_oBBiVuLWgIg';
 
 // Works from the Sheet's menu and from the web app
@@ -21,10 +22,11 @@ function ss_() {
 
 function doGet(e) {
   if (e && e.parameter && e.parameter.state && (e.parameter.code || e.parameter.error)) return finishConnect_(e);
+  const view = isViewOnly_();
   const page = HtmlService.createHtmlOutputFromFile('DashboardPage')
-    .setTitle(DASH_TITLE)
+    .setTitle(view ? 'Insights Planner | 1KH US (view only)' : DASH_TITLE)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-  try { page.setFaviconUrl(DASH_FAVICON); } catch (e) { console.log('Tab icon not set: ' + e.message); }
+  try { page.setFaviconUrl(view ? DASH_FAVICON_VIEW : DASH_FAVICON); } catch (e) { console.log('Tab icon not set: ' + e.message); }
   return page;
 }
 
